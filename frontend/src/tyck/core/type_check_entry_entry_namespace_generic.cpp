@@ -351,6 +351,7 @@ namespace parus::tyck {
         expr_external_callee_symbol_cache_.assign(ast_.exprs().size(), sema::SymbolTable::kNoScope);
         expr_external_callee_type_cache_.assign(ast_.exprs().size(), ty::kInvalidType);
         expr_external_receiver_expr_cache_.assign(ast_.exprs().size(), ast::k_invalid_expr);
+        expr_array_family_call_kind_cache_.assign(ast_.exprs().size(), static_cast<uint8_t>(ArrayFamilyCallKind::kNone));
         expr_call_is_c_abi_cache_.assign(ast_.exprs().size(), 0u);
         expr_call_is_c_variadic_cache_.assign(ast_.exprs().size(), 0u);
         expr_call_c_callconv_cache_.assign(ast_.exprs().size(), ty::CCallConv::kDefault);
@@ -389,6 +390,7 @@ namespace parus::tyck {
         result_.expr_external_callee_symbol = expr_external_callee_symbol_cache_;
         result_.expr_external_callee_type = expr_external_callee_type_cache_;
         result_.expr_external_receiver_expr = expr_external_receiver_expr_cache_;
+        result_.expr_array_family_call_kind = expr_array_family_call_kind_cache_;
         result_.expr_call_is_c_abi = expr_call_is_c_abi_cache_;
         result_.expr_call_is_c_variadic = expr_call_is_c_variadic_cache_;
         result_.expr_call_c_callconv = expr_call_c_callconv_cache_;
@@ -770,6 +772,7 @@ namespace parus::tyck {
         result_.expr_external_callee_symbol = expr_external_callee_symbol_cache_;
         result_.expr_external_callee_type = expr_external_callee_type_cache_;
         result_.expr_external_receiver_expr = expr_external_receiver_expr_cache_;
+        result_.expr_array_family_call_kind = expr_array_family_call_kind_cache_;
         result_.expr_call_is_c_abi = expr_call_is_c_abi_cache_;
         result_.expr_call_is_c_variadic = expr_call_is_c_variadic_cache_;
         result_.expr_call_c_callconv = expr_call_c_callconv_cache_;
@@ -2096,6 +2099,9 @@ namespace parus::tyck {
         if (expr_external_callee_type_cache_.size() < expr_size) {
             expr_external_callee_type_cache_.resize(expr_size, ty::kInvalidType);
         }
+        if (expr_array_family_call_kind_cache_.size() < expr_size) {
+            expr_array_family_call_kind_cache_.resize(expr_size, static_cast<uint8_t>(ArrayFamilyCallKind::kNone));
+        }
         if (expr_loop_source_kind_cache_.size() < expr_size) {
             expr_loop_source_kind_cache_.resize(expr_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
         }
@@ -2738,6 +2744,7 @@ namespace parus::tyck {
         if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
         if (expr_external_callee_symbol_cache_.size() < expr_size) expr_external_callee_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (expr_external_callee_type_cache_.size() < expr_size) expr_external_callee_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_array_family_call_kind_cache_.size() < expr_size) expr_array_family_call_kind_cache_.resize(expr_size, static_cast<uint8_t>(ArrayFamilyCallKind::kNone));
         if (expr_external_callee_symbol_cache_.size() < expr_size) expr_external_callee_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (expr_external_callee_type_cache_.size() < expr_size) expr_external_callee_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_external_callee_symbol_cache_.size() < expr_size) expr_external_callee_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
@@ -3319,10 +3326,12 @@ namespace parus::tyck {
         if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
         if (expr_external_callee_symbol_cache_.size() < expr_size) expr_external_callee_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (expr_external_callee_type_cache_.size() < expr_size) expr_external_callee_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_array_family_call_kind_cache_.size() < expr_size) expr_array_family_call_kind_cache_.resize(expr_size, static_cast<uint8_t>(ArrayFamilyCallKind::kNone));
         if (expr_external_callee_symbol_cache_.size() < expr_size) expr_external_callee_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (expr_external_callee_type_cache_.size() < expr_size) expr_external_callee_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_external_callee_symbol_cache_.size() < expr_size) expr_external_callee_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (expr_external_callee_type_cache_.size() < expr_size) expr_external_callee_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_array_family_call_kind_cache_.size() < expr_size) expr_array_family_call_kind_cache_.resize(expr_size, static_cast<uint8_t>(ArrayFamilyCallKind::kNone));
         if (expr_loop_source_kind_cache_.size() < expr_size) expr_loop_source_kind_cache_.resize(expr_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
         if (expr_loop_binder_type_cache_.size() < expr_size) expr_loop_binder_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_loop_iterator_type_cache_.size() < expr_size) expr_loop_iterator_type_cache_.resize(expr_size, ty::kInvalidType);
@@ -3971,6 +3980,7 @@ namespace parus::tyck {
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (stmt_resolved_symbol_cache_.size() < stmt_size) stmt_resolved_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
         if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_array_family_call_kind_cache_.size() < expr_size) expr_array_family_call_kind_cache_.resize(expr_size, static_cast<uint8_t>(ArrayFamilyCallKind::kNone));
         if (expr_loop_source_kind_cache_.size() < expr_size) expr_loop_source_kind_cache_.resize(expr_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
         if (expr_loop_binder_type_cache_.size() < expr_size) expr_loop_binder_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_loop_iterator_type_cache_.size() < expr_size) expr_loop_iterator_type_cache_.resize(expr_size, ty::kInvalidType);
@@ -4246,6 +4256,7 @@ namespace parus::tyck {
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (stmt_resolved_symbol_cache_.size() < stmt_size) stmt_resolved_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
         if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_array_family_call_kind_cache_.size() < expr_size) expr_array_family_call_kind_cache_.resize(expr_size, static_cast<uint8_t>(ArrayFamilyCallKind::kNone));
         if (expr_loop_source_kind_cache_.size() < expr_size) expr_loop_source_kind_cache_.resize(expr_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
         if (expr_loop_binder_type_cache_.size() < expr_size) expr_loop_binder_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_loop_iterator_type_cache_.size() < expr_size) expr_loop_iterator_type_cache_.resize(expr_size, ty::kInvalidType);

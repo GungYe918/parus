@@ -1255,7 +1255,12 @@ namespace parus::sir {
                              type_contains_escape_(v.core_call_type_arg)) ||
                             (v.core_call_kind == CoreCallKind::kMemTake &&
                              is_optional_escape_type_(v.core_call_type_arg));
-                        if (is_escape_mem_core_call) {
+                        const bool is_array_family_core_call =
+                            v.core_call_kind == CoreCallKind::kArraySwapAt ||
+                            v.core_call_kind == CoreCallKind::kArrayOwnerReplaceAt ||
+                            v.core_call_kind == CoreCallKind::kArrayOwnerTakeAt ||
+                            v.core_call_kind == CoreCallKind::kArrayOwnerPutAt;
+                        if (is_escape_mem_core_call || is_array_family_core_call) {
                             auto arg_value_at_ = [&](uint32_t index) -> ValueId {
                                 if (index >= v.arg_count) return k_invalid_value;
                                 const uint32_t aid = v.arg_begin + index;
@@ -1272,7 +1277,8 @@ namespace parus::sir {
 
                             const ValueId lhs = arg_value_at_(0);
                             const ValueId rhs = arg_value_at_(1);
-                            if (v.core_call_kind == CoreCallKind::kMemTake) {
+                            if (v.core_call_kind == CoreCallKind::kMemTake ||
+                                v.core_call_kind == CoreCallKind::kArrayOwnerTakeAt) {
                                 if (lhs != k_invalid_value) {
                                     analyze_value_(lhs, ValueUse::kValue, k_invalid_symbol);
                                     report_shared_write_if_needed_(lhs);
@@ -1282,7 +1288,9 @@ namespace parus::sir {
                                 }
                                 return;
                             }
-                            if (v.core_call_kind == CoreCallKind::kMemReplace) {
+                            if (v.core_call_kind == CoreCallKind::kMemReplace ||
+                                v.core_call_kind == CoreCallKind::kArrayOwnerReplaceAt ||
+                                v.core_call_kind == CoreCallKind::kArrayOwnerPutAt) {
                                 if (lhs != k_invalid_value) {
                                     analyze_value_(lhs, ValueUse::kValue, k_invalid_symbol);
                                     report_shared_write_if_needed_(lhs);

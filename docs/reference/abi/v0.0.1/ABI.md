@@ -251,6 +251,7 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
    - `docs/reference/abi/v0.0.1/STRING_MODEL.md`
 2. 스택/힙/정적 저장소 정책 및 `~` 저장/ABI 규칙:
    - `docs/reference/abi/v0.0.1/STORAGE_POLICY.md`
+   - sized owner-array의 public surface는 compiler-owned array family method (`swap`, `replace`, `take`, `put`)를 사용한다
 3. nullable(`T?`) 의미 규칙/승격 정책/하강 정합성:
    - `docs/reference/abi/v0.0.1/NULLABLE_MODEL.md`
 4. OOP 역할 분리/`self`-`Self`/`acts`-`proto`-`class`-`actor` 규칙:

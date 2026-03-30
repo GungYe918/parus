@@ -7657,6 +7657,329 @@ bool test_escape_sized_array_owner_cells_runtime() {
     return true;
 }
 
+bool test_escape_sized_array_container_methods_runtime() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-array-methods-runtime";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "out";
+    const std::string src =
+        "proto Probe {\n"
+        "  provide def probe() -> i32 { return 20i32; }\n"
+        "};\n"
+        "\n"
+        "class Worker: Probe {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "  def run(self) -> i32 { return self.value + 1i32; }\n"
+        "};\n"
+        "\n"
+        "class WorkerGroup {\n"
+        "  workers: (~Worker)[2];\n"
+        "  slots: ((~Worker)?)[2];\n"
+        "\n"
+        "  init(a: ~Worker, b: ~Worker, c: ~Worker) {\n"
+        "    self.workers = [a, b];\n"
+        "    self.slots = [null, null];\n"
+        "    let ignored: (~Worker)? = self.slots.put(1usize, c);\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "class Pool {\n"
+        "  groups: WorkerGroup[1];\n"
+        "  plain: i32[2];\n"
+        "\n"
+        "  init(a: ~Worker, b: ~Worker, c: ~Worker) {\n"
+        "    self.groups = [WorkerGroup(a, b, c)];\n"
+        "    self.plain = [10i32, 20i32];\n"
+        "  }\n"
+        "\n"
+        "  def run(mut self) -> i32 {\n"
+        "    self.plain.swap(0usize, 1usize);\n"
+        "    self.groups[0].workers.swap(0usize, 1usize);\n"
+        "    let old: ~Worker = self.groups[0].workers.replace(1usize, make(4i32));\n"
+        "    set mut prev = self.groups[0].slots.put(1usize, old);\n"
+        "    set mut taken_opt = self.groups[0].slots.take(1usize);\n"
+        "    let taken: ~Worker = taken_opt else { return 1i32; };\n"
+        "    let prev_worker: ~Worker = prev else { return 2i32; };\n"
+        "    return self.plain[0usize] + self.groups[0].workers[0].run() +\n"
+        "           self.groups[0].workers[1]->probe() + taken.run() + prev_worker.run();\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "def make(seed: i32) -> ~Worker {\n"
+        "  set w = Worker(seed);\n"
+        "  return ~w;\n"
+        "}\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set mut p = Pool(make(1i32), make(2i32), make(3i32));\n"
+        "  let total: i32 = p.run();\n"
+        "  if (total == 49i32) { return 0i32; }\n"
+        "  return total;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write sized array method runtime test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for sized array method runtime test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc_build, out_build] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    if (rc_build != 0) {
+        std::cerr << "sized array method runtime sample should compile/link\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_run, out_run] = run_capture("\"" + exe.string() + "\"");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_run != 0) {
+        std::cerr << "sized array method runtime exit mismatch (expected 0)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
+bool test_escape_array_method_take_rejected_on_plain_owner_array() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-array-method-take-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "class Worker {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "};\n"
+        "def make(seed: i32) -> ~Worker {\n"
+        "  set w = Worker(seed);\n"
+        "  return ~w;\n"
+        "}\n"
+        "def main() -> i32 {\n"
+        "  set mut items = [make(1i32)];\n"
+        "  let bad: (~Worker)? = items.take(0usize);\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write array take rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for array take rejection test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target);
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc == 0) {
+        std::cerr << "plain owner array take should fail\n";
+        return false;
+    }
+    if (out.find("array method `take` is only available on optional owner arrays") == std::string::npos ||
+        out.find(".replace(i, value)") == std::string::npos) {
+        std::cerr << "plain owner array take rejection should explain optional-owner-array guidance\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_escape_array_method_replace_rejected_on_optional_owner_array() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-array-method-replace-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "class Worker {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "};\n"
+        "def make(seed: i32) -> ~Worker {\n"
+        "  set w = Worker(seed);\n"
+        "  return ~w;\n"
+        "}\n"
+        "def main() -> i32 {\n"
+        "  let seed: ((~Worker)?)[1] = [null];\n"
+        "  set mut items = seed;\n"
+        "  let bad: (~Worker)? = items.replace(0usize, make(1i32));\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write array replace rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for array replace rejection test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target);
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc == 0) {
+        std::cerr << "optional owner array replace should fail\n";
+        return false;
+    }
+    if (out.find("array method `replace` is only available on plain owner arrays") == std::string::npos ||
+        out.find(".put(i, value)") == std::string::npos) {
+        std::cerr << "optional owner array replace rejection should explain put guidance\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_escape_array_method_put_rejected_on_non_owner_array() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-array-method-put-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "class Worker {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "};\n"
+        "def make(seed: i32) -> ~Worker {\n"
+        "  set w = Worker(seed);\n"
+        "  return ~w;\n"
+        "}\n"
+        "def main() -> i32 {\n"
+        "  set mut items = [1i32, 2i32];\n"
+        "  let bad: i32 = items.put(0usize, make(1i32));\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write array put rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for array put rejection test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target);
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc == 0) {
+        std::cerr << "non-owner array put should fail\n";
+        return false;
+    }
+    if (out.find("array method `put` is only available on optional owner arrays") == std::string::npos ||
+        out.find("ordinary indexed assignment") == std::string::npos) {
+        std::cerr << "non-owner array put rejection should explain non-owner guidance\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_escape_array_method_rejects_immutable_receiver() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-array-method-immutable-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "def main() -> i32 {\n"
+        "  let items: i32[2] = [1i32, 2i32];\n"
+        "  items.swap(0usize, 1usize);\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write immutable receiver rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for immutable receiver rejection test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target);
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc == 0) {
+        std::cerr << "immutable array receiver should fail\n";
+        return false;
+    }
+    if (out.find("requires a mutable receiver") == std::string::npos ||
+        out.find("set mut arr") == std::string::npos) {
+        std::cerr << "immutable receiver rejection should explain mut receiver guidance\n" << out;
+        return false;
+    }
+    return true;
+}
+
 bool test_escape_unsized_owner_array_rejected() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -8485,6 +8808,11 @@ int main() {
     const bool ok101 = test_escape_enum_owner_payload_direct_place_switch_rejected();
     const bool ok102 = test_escape_enum_owner_payload_borrow_switch_rejected();
     const bool ok103 = test_escape_mem_take_rejects_non_owner_optional();
+    const bool ok104 = test_escape_sized_array_container_methods_runtime();
+    const bool ok105 = test_escape_array_method_take_rejected_on_plain_owner_array();
+    const bool ok106 = test_escape_array_method_replace_rejected_on_optional_owner_array();
+    const bool ok107 = test_escape_array_method_put_rejected_on_non_owner_array();
+    const bool ok108 = test_escape_array_method_rejects_immutable_receiver();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
@@ -8494,7 +8822,8 @@ int main() {
         !ok60 || !ok61 || !ok62 || !ok63 || !ok64 || !ok65 || !ok66 || !ok67 || !ok68 || !ok69 || !ok70 || !ok71 ||
         !ok72 || !ok73 || !ok74 || !ok75 || !ok76 || !ok77 || !ok78 || !ok79 || !ok80 || !ok81 || !ok82 ||
         !ok83 || !ok84 || !ok85 || !ok86 || !ok87 || !ok88 || !ok89 || !ok90 || !ok91 || !ok92 || !ok93 || !ok94 ||
-        !ok95 || !ok96 || !ok97 || !ok98 || !ok99 || !ok100 || !ok101 || !ok102 || !ok103) {
+        !ok95 || !ok96 || !ok97 || !ok98 || !ok99 || !ok100 || !ok101 || !ok102 || !ok103 || !ok104 || !ok105 ||
+        !ok106 || !ok107 || !ok108) {
         return 1;
     }
 

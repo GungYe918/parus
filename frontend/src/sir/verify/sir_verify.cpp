@@ -383,10 +383,12 @@ namespace parus::sir {
                     const bool has_direct_callee_meta =
                         (v.callee_sym != k_invalid_symbol) ||
                         (v.callee_decl_stmt != 0xFFFF'FFFFu);
+                    const bool has_core_call_meta =
+                        v.core_call_kind != CoreCallKind::kNone;
 
                     if (v.a != k_invalid_value) {
                         need_child(v.a, "callee");
-                    } else if (!has_direct_callee_meta) {
+                    } else if (!has_direct_callee_meta && !has_core_call_meta) {
                         std::ostringstream oss;
                         oss << "value #" << vid
                             << " call requires callee value or direct callee metadata";

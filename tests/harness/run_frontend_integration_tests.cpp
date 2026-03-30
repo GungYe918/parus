@@ -2913,6 +2913,89 @@ namespace {
         return ok;
     }
 
+    static bool test_escape_sized_array_container_methods_surface() {
+        const std::string src = R"(
+            proto Probe {
+                provide def probe() -> i32 {
+                    return 20i32;
+                }
+            };
+
+            class Worker: Probe {
+                value: i32;
+
+                init(v: i32) {
+                    self.value = v;
+                }
+
+                def run(self) -> i32 {
+                    return self.value + 1i32;
+                }
+            };
+
+            class WorkerGroup {
+                workers: (~Worker)[2];
+                slots: ((~Worker)?)[2];
+
+                init(a: ~Worker, b: ~Worker, c: ~Worker) {
+                    self.workers = [a, b];
+                    self.slots = [null, null];
+                    let ignored: (~Worker)? = self.slots.put(1usize, c);
+                }
+            };
+
+            class Pool {
+                groups: WorkerGroup[1];
+                plain: i32[2];
+
+                init(a: ~Worker, b: ~Worker, c: ~Worker) {
+                    self.groups = [WorkerGroup(a, b, c)];
+                    self.plain = [10i32, 20i32];
+                }
+
+                def run(mut self) -> i32 {
+                    self.plain.swap(0usize, 1usize);
+                    self.groups[0].workers.swap(0usize, 1usize);
+                    let old: ~Worker = self.groups[0].workers.replace(1usize, make(4i32));
+                    set mut prev = self.groups[0].slots.put(1usize, old);
+                    set mut taken_opt = self.groups[0].slots.take(1usize);
+                    let taken: ~Worker = taken_opt else {
+                        return 1i32;
+                    };
+                    let prev_worker: ~Worker = prev else {
+                        return 2i32;
+                    };
+                    return self.plain[0usize] + self.groups[0].workers[0].run() +
+                           self.groups[0].workers[1]->probe() + taken.run() + prev_worker.run();
+                }
+            };
+
+            def make(seed: i32) -> ~Worker {
+                set w = Worker(seed);
+                return ~w;
+            }
+
+            def main() -> i32 {
+                set mut p = Pool(make(1i32), make(2i32), make(3i32));
+                return p.run();
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p, &pres.generic_prep, &pres.sym);
+        auto cap = run_cap(p, pres, ty);
+        auto sir = run_sir(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "sized array method surface seed must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "sized array method surface seed must not emit tyck errors");
+        ok &= require_(cap.ok, "sized array method surface seed must pass AST capability check");
+        ok &= require_(sir.cap.ok, "sized array method surface seed must pass SIR capability check");
+        ok &= require_(sir.handle_verify_errors.empty(), "sized array method surface seed must pass handle verification");
+        return ok;
+    }
+
     static bool test_escape_named_aggregate_unsized_container_rejected() {
         const std::string src = R"(
             class Worker {
@@ -3722,6 +3805,7 @@ int main() {
         {"escape_stored_handle_calls_stay_cell_only", test_escape_stored_handle_calls_stay_cell_only},
         {"escape_sized_array_owner_cells", test_escape_sized_array_owner_cells},
         {"escape_projected_owner_cells_and_named_aggregates", test_escape_projected_owner_cells_and_named_aggregates},
+        {"escape_sized_array_container_methods_surface", test_escape_sized_array_container_methods_surface},
         {"escape_named_aggregate_unsized_container_rejected", test_escape_named_aggregate_unsized_container_rejected},
         {"sir_handle_verify_rejects_invalid_escape_pack_state", test_sir_handle_verify_rejects_invalid_escape_pack_state},
         {"oir_gate_rejects_invalid_escape_handle", test_oir_gate_rejects_invalid_escape_handle},

@@ -3078,14 +3078,19 @@ namespace parus::oir {
                                 ? static_cast<TypeId>(v.core_call_type_arg)
                                 : kInvalidId;
                         const TypeId arg_escape_ty = arg_escape_type_(a.value);
-                        if (v.core_call_kind == parus::sir::CoreCallKind::kMemReplace) {
+                        if (v.core_call_kind == parus::sir::CoreCallKind::kMemReplace ||
+                            v.core_call_kind == parus::sir::CoreCallKind::kArrayOwnerReplaceAt ||
+                            v.core_call_kind == parus::sir::CoreCallKind::kArrayOwnerPutAt) {
                             lower_as_place = (i == 0u) && (core_escape_ty != kInvalidId || arg_escape_ty != kInvalidId);
-                        } else if (v.core_call_kind == parus::sir::CoreCallKind::kMemTake) {
+                        } else if (v.core_call_kind == parus::sir::CoreCallKind::kMemTake ||
+                                   v.core_call_kind == parus::sir::CoreCallKind::kArrayOwnerTakeAt) {
                             lower_as_place = (i == 0u) && core_escape_ty != kInvalidId;
                         } else if (v.core_call_kind == parus::sir::CoreCallKind::kMemSwap) {
                             if (i < 2u) {
                                 lower_as_place = (core_escape_ty != kInvalidId || arg_escape_ty != kInvalidId);
                             }
+                        } else if (v.core_call_kind == parus::sir::CoreCallKind::kArraySwapAt) {
+                            lower_as_place = (i < 2u);
                         }
 
                         args.push_back(lower_as_place ? lower_place(a.value) : lower_value(a.value));
@@ -3194,7 +3199,9 @@ namespace parus::oir {
                                     : (((size_t)args[0] < out->values.size()) ? out->values[args[0]].ty : kInvalidId);
                             return emit_step_next_core_(args[0], step_ty, v.type);
                         }
-                        case parus::sir::CoreCallKind::kMemReplace: {
+                        case parus::sir::CoreCallKind::kMemReplace:
+                        case parus::sir::CoreCallKind::kArrayOwnerReplaceAt:
+                        case parus::sir::CoreCallKind::kArrayOwnerPutAt: {
                             if (args.size() != 2u) {
                                 report_lowering_error("core::mem::replace lowering failed: expected 2 arguments");
                                 return emit_const_null(v.type);
@@ -3217,7 +3224,8 @@ namespace parus::oir {
                             emit_store(slot, newv);
                             return oldv;
                         }
-                        case parus::sir::CoreCallKind::kMemTake: {
+                        case parus::sir::CoreCallKind::kMemTake:
+                        case parus::sir::CoreCallKind::kArrayOwnerTakeAt: {
                             if (args.size() != 1u) {
                                 report_lowering_error("core::mem::take lowering failed: expected 1 argument");
                                 return emit_const_null(v.type);
@@ -3239,7 +3247,8 @@ namespace parus::oir {
                             emit_store(slot, emit_const_null(elem_ty));
                             return oldv;
                         }
-                        case parus::sir::CoreCallKind::kMemSwap: {
+                        case parus::sir::CoreCallKind::kMemSwap:
+                        case parus::sir::CoreCallKind::kArraySwapAt: {
                             if (args.size() != 2u) {
                                 report_lowering_error("core::mem::swap lowering failed: expected 2 arguments");
                                 return emit_const_null(v.type);
@@ -4509,7 +4518,8 @@ namespace parus::oir {
                     const auto& place = sir->values[s.init];
                     const bool consume_from_mem_take =
                         place.kind == parus::sir::ValueKind::kCall &&
-                        place.core_call_kind == parus::sir::CoreCallKind::kMemTake;
+                        (place.core_call_kind == parus::sir::CoreCallKind::kMemTake ||
+                         place.core_call_kind == parus::sir::CoreCallKind::kArrayOwnerTakeAt);
                     TypeId opt_ty = place.type;
                     TypeId payload_ty = declared;
                     if (types != nullptr &&

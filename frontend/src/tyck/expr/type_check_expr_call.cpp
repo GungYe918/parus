@@ -214,6 +214,11 @@ namespace parus::tyck {
             expr_external_receiver_expr_cache_[call_expr_id] = ast::k_invalid_expr;
         }
         if (call_expr_id != ast::k_invalid_expr &&
+            call_expr_id < expr_array_family_call_kind_cache_.size()) {
+            expr_array_family_call_kind_cache_[call_expr_id] =
+                static_cast<uint8_t>(ArrayFamilyCallKind::kNone);
+        }
+        if (call_expr_id != ast::k_invalid_expr &&
             call_expr_id < expr_call_is_c_abi_cache_.size()) {
             expr_call_is_c_abi_cache_[call_expr_id] = 0u;
         }
@@ -610,6 +615,363 @@ namespace parus::tyck {
             return suffix_match(lhs, rhs) || suffix_match(rhs, lhs);
         };
 
+        auto cache_array_family_call_ = [&](ArrayFamilyCallKind kind) {
+            if (call_expr_id != ast::k_invalid_expr &&
+                call_expr_id < expr_array_family_call_kind_cache_.size()) {
+                expr_array_family_call_kind_cache_[call_expr_id] =
+                    static_cast<uint8_t>(kind);
+            }
+        };
+
+        struct ArrayFamilyMethodResult {
+            bool matched = false;
+            bool ok = false;
+            ty::TypeId result_type = ty::kInvalidType;
+        };
+
+        auto try_check_array_family_method_ = [&](ast::ExprId recv_eid,
+                                                  ty::TypeId recv_t,
+                                                  std::string_view member_name,
+                                                  Span member_span) -> ArrayFamilyMethodResult {
+            ArrayFamilyMethodResult out{};
+            if (member_name != "swap" &&
+                member_name != "replace" &&
+                member_name != "take" &&
+                member_name != "put") {
+                return out;
+            }
+            if (recv_t == ty::kInvalidType || is_error_(recv_t) || recv_t >= types_.count()) {
+                return out;
+            }
+
+            auto add_array_method_diag = [&](Span primary_span,
+                                             Span label_span,
+                                             std::string primary,
+                                             std::string label,
+                                             std::string note,
+                                             std::string help) {
+                diag::Diagnostic d(diag::Severity::kError, diag::Code::kTypeErrorGeneric, primary_span);
+                d.add_arg(std::move(primary));
+                d.add_label(label_span, std::move(label));
+                if (!note.empty()) d.add_note(std::move(note));
+                if (!help.empty()) d.add_help(std::move(help));
+                if (diag_bag_) diag_bag_->add(std::move(d));
+            };
+            auto require_positional_arity = [&](size_t expected, std::string_view sig) -> bool {
+                if (form == CallForm::kPositionalOnly &&
+                    outside_positional.size() == expected &&
+                    outside_labeled.empty()) {
+                    return true;
+                }
+                add_array_method_diag(
+                    e.span,
+                    member_span,
+                    "compiler-owned sized array method `" + std::string(member_name) +
+                        "` expects " + std::string(sig),
+                    "this method uses fixed positional arguments on sized arrays",
+                    "this round exposes sized owner-array container operations as compiler-owned array family methods",
+                    "call `" + std::string(member_name) + std::string(sig) + "` on a writable sized array receiver");
+                err_(e.span, "invalid compiler-owned sized array method shape");
+                return false;
+            };
+            auto check_index_arg_ = [&](const ast::Arg* arg, std::string_view which) -> bool {
+                if (arg == nullptr || arg->expr == ast::k_invalid_expr) {
+                    add_array_method_diag(
+                        e.span,
+                        member_span,
+                        "compiler-owned sized array method `" + std::string(member_name) +
+                            "` requires an integer index argument",
+                        std::string(which) + " index is missing here",
+                        "sized array container methods operate on concrete element indices",
+                        "pass an integer index such as `0usize` or `i`");
+                    err_(member_span, "array method index argument is missing");
+                    return false;
+                }
+                ty::TypeId idx_t = check_expr_(arg->expr);
+                if (!is_error_(idx_t)) {
+                    const auto& itt = types_.get(idx_t);
+                    if (itt.kind == ty::Kind::kBuiltin &&
+                        itt.builtin == ty::Builtin::kInferInteger) {
+                        (void)resolve_infer_int_in_context_(arg->expr, types_.builtin(ty::Builtin::kUSize));
+                        idx_t = check_expr_(arg->expr);
+                    }
+                }
+                if (!is_error_(idx_t) && !is_index_int_type_(idx_t)) {
+                    add_array_method_diag(
+                        e.span,
+                        arg->span,
+                        "compiler-owned sized array method `" + std::string(member_name) +
+                            "` requires integer indices",
+                        "this argument has type `" + types_.to_string(idx_t) + "`",
+                        "sized array container methods follow the same indexing rules as `arr[i]` in v0",
+                        "use an integer/`usize` index expression here");
+                    err_(arg->span, "array method index must be integer type in v0");
+                    return false;
+                }
+                return !is_error_(idx_t);
+            };
+            auto require_writable_array_place_ = [&](bool forbid_global_like) -> std::optional<uint32_t> {
+                if (!is_place_expr_(recv_eid)) {
+                    add_array_method_diag(
+                        e.span,
+                        member_span,
+                        "compiler-owned sized array method `" + std::string(member_name) +
+                            "` requires a writable sized array place receiver",
+                        "this receiver is not a writable place",
+                        "array family container methods mutate the receiver in place",
+                        "store the sized array in a mutable local/field and call the method on that place");
+                    err_(member_span, "array method receiver must be a writable place");
+                    return std::nullopt;
+                }
+                const auto root = root_place_symbol_(recv_eid);
+                if (!root.has_value() || !is_mutable_symbol_(*root)) {
+                    add_array_method_diag(
+                        e.span,
+                        member_span,
+                        "compiler-owned sized array method `" + std::string(member_name) +
+                            "` requires a mutable receiver",
+                        "this sized array receiver is not writable",
+                        "container mutation rewrites the receiver's element cells in place",
+                        "make the root binding mutable, for example `set mut arr = ...` or use `mut self`");
+                    err_(member_span, "array method receiver must be mutable");
+                    return std::nullopt;
+                }
+                if (!ensure_symbol_readable_(*root, member_span)) {
+                    return std::nullopt;
+                }
+                if (forbid_global_like && is_global_like_symbol_(*root)) {
+                    diag_(diag::Code::kMoveFromGlobalOrStaticForbidden, member_span, sym_.symbol(*root).name);
+                    err_(member_span, "move from global/static owner array is not allowed");
+                    return std::nullopt;
+                }
+                return root;
+            };
+
+            const auto& recv_tt = types_.get(recv_t);
+            if (recv_tt.kind != ty::Kind::kArray) {
+                return out;
+            }
+            out.matched = true;
+
+            if (explicit_call_type_args.size() > 0) {
+                diag_(diag::Code::kGenericArityMismatch, e.span, "0",
+                      std::to_string(explicit_call_type_args.size()));
+                err_(e.span, "compiler-owned sized array methods do not accept explicit type arguments");
+                out.ok = false;
+                out.result_type = types_.error();
+                return out;
+            }
+
+            if (!recv_tt.array_has_size) {
+                add_array_method_diag(
+                    e.span,
+                    member_span,
+                    "compiler-owned array family methods are only available on sized arrays `T[N]` in this round",
+                    "this receiver has unsized array/view type `" + types_.to_string(recv_t) + "`",
+                    "unsized views remain non-owning and do not get the compiler-owned owner-container method surface",
+                    "use a sized array such as `T[N]`, `(~T)[N]`, or `((~T)?)[N]`, or move this operation into a storage-safe named aggregate");
+                err_(member_span, "array family methods require sized array receivers");
+                out.ok = false;
+                out.result_type = types_.error();
+                return out;
+            }
+
+            const ty::TypeId elem_t = recv_tt.elem;
+            const bool elem_is_escape =
+                elem_t != ty::kInvalidType &&
+                elem_t < types_.count() &&
+                types_.get(elem_t).kind == ty::Kind::kEscape;
+            const bool elem_is_optional_escape =
+                elem_t != ty::kInvalidType &&
+                elem_t < types_.count() &&
+                types_.get(elem_t).kind == ty::Kind::kOptional &&
+                types_.get(elem_t).elem != ty::kInvalidType &&
+                types_.get(elem_t).elem < types_.count() &&
+                types_.get(types_.get(elem_t).elem).kind == ty::Kind::kEscape;
+            const bool array_contains_escape = type_contains_escape_(recv_t);
+
+            if (member_name == "swap") {
+                if (!require_positional_arity(2u, "(i, j)")) {
+                    out.ok = false;
+                    out.result_type = types_.error();
+                    return out;
+                }
+                if (!check_index_arg_(outside_positional[0], "first") ||
+                    !check_index_arg_(outside_positional[1], "second")) {
+                    out.ok = false;
+                    out.result_type = types_.error();
+                    return out;
+                }
+                const auto root = require_writable_array_place_(/*forbid_global_like=*/array_contains_escape);
+                if (!root.has_value()) {
+                    out.ok = false;
+                    out.result_type = types_.error();
+                    return out;
+                }
+                mark_symbol_initialized_(*root);
+                cache_array_family_call_(ArrayFamilyCallKind::kSwap);
+                out.ok = true;
+                out.result_type = types_.builtin(ty::Builtin::kUnit);
+                return out;
+            }
+
+            if (member_name == "replace") {
+                if (!elem_is_escape) {
+                    const std::string help =
+                        elem_is_optional_escape
+                            ? "use `.put(i, value)` on `((~T)?)[N]`, or keep using `mem::take`/consume-binding when extraction is needed"
+                            : "use ordinary indexed assignment/swap for non-owner arrays";
+                    add_array_method_diag(
+                        e.span,
+                        member_span,
+                        "compiler-owned array method `replace` is only available on plain owner arrays `(~T)[N]`",
+                        "this receiver has type `" + types_.to_string(recv_t) + "`",
+                        "`replace` models explicit owner-cell replacement on a plain sized owner array",
+                        help);
+                    err_(member_span, "array replace requires plain owner array receiver");
+                    out.ok = false;
+                    out.result_type = types_.error();
+                    return out;
+                }
+                if (!require_positional_arity(2u, "(i, value)")) {
+                    out.ok = false;
+                    out.result_type = types_.error();
+                    return out;
+                }
+                if (!check_index_arg_(outside_positional[0], "first")) {
+                    out.ok = false;
+                    out.result_type = types_.error();
+                    return out;
+                }
+                const auto root = require_writable_array_place_(/*forbid_global_like=*/true);
+                if (!root.has_value()) {
+                    out.ok = false;
+                    out.result_type = types_.error();
+                    return out;
+                }
+                const CoercionPlan value_plan = classify_assign_with_coercion_(
+                    AssignSite::CallArg, elem_t,
+                    outside_positional[1]->expr, outside_positional[1]->span);
+                if (!value_plan.ok) {
+                    add_array_method_diag(
+                        e.span,
+                        outside_positional[1]->span,
+                        "array owner `replace` expects a replacement value assignable to `" + types_.to_string(elem_t) + "`",
+                        "this argument does not match the owner element type",
+                        "`replace` moves a new owner into the indexed cell and returns the old one",
+                        "pass a value of type `" + types_.to_string(elem_t) + "` here");
+                    err_(outside_positional[1]->span, "array replace value type mismatch");
+                    out.ok = false;
+                    out.result_type = types_.error();
+                    return out;
+                }
+                mark_expr_move_consumed_(outside_positional[1]->expr, elem_t, outside_positional[1]->span);
+                mark_symbol_initialized_(*root);
+                cache_array_family_call_(ArrayFamilyCallKind::kOwnerReplace);
+                out.ok = true;
+                out.result_type = elem_t;
+                return out;
+            }
+
+            if (member_name == "take") {
+                if (!elem_is_optional_escape) {
+                    const std::string help =
+                        elem_is_escape
+                            ? "use `.replace(i, value)` on `(~T)[N]`, or keep using `mem::replace(arr[i], value)` when you already have a replacement"
+                            : "use ordinary indexed read/assignment for non-owner arrays";
+                    add_array_method_diag(
+                        e.span,
+                        member_span,
+                        "compiler-owned array method `take` is only available on optional owner arrays `((~T)?)[N]`",
+                        "this receiver has type `" + types_.to_string(recv_t) + "`",
+                        "`take` is shorthand for indexed optional owner extraction plus null writeback",
+                        help);
+                    err_(member_span, "array take requires optional owner array receiver");
+                    out.ok = false;
+                    out.result_type = types_.error();
+                    return out;
+                }
+                if (!require_positional_arity(1u, "(i)")) {
+                    out.ok = false;
+                    out.result_type = types_.error();
+                    return out;
+                }
+                if (!check_index_arg_(outside_positional[0], "first")) {
+                    out.ok = false;
+                    out.result_type = types_.error();
+                    return out;
+                }
+                const auto root = require_writable_array_place_(/*forbid_global_like=*/true);
+                if (!root.has_value()) {
+                    out.ok = false;
+                    out.result_type = types_.error();
+                    return out;
+                }
+                mark_symbol_initialized_(*root);
+                cache_array_family_call_(ArrayFamilyCallKind::kOwnerTake);
+                out.ok = true;
+                out.result_type = elem_t;
+                return out;
+            }
+
+            if (!elem_is_optional_escape) {
+                const std::string help =
+                    elem_is_escape
+                        ? "use `.replace(i, value)` on `(~T)[N]` when the indexed cell is always occupied"
+                        : "use ordinary indexed assignment for non-owner arrays";
+                add_array_method_diag(
+                    e.span,
+                    member_span,
+                    "compiler-owned array method `put` is only available on optional owner arrays `((~T)?)[N]`",
+                    "this receiver has type `" + types_.to_string(recv_t) + "`",
+                    "`put` writes a new owner into an optional owner slot and returns the previous optional value",
+                    help);
+                err_(member_span, "array put requires optional owner array receiver");
+                out.ok = false;
+                out.result_type = types_.error();
+                return out;
+            }
+            if (!require_positional_arity(2u, "(i, value)")) {
+                out.ok = false;
+                out.result_type = types_.error();
+                return out;
+            }
+            if (!check_index_arg_(outside_positional[0], "first")) {
+                out.ok = false;
+                out.result_type = types_.error();
+                return out;
+            }
+            const auto root = require_writable_array_place_(/*forbid_global_like=*/true);
+            if (!root.has_value()) {
+                out.ok = false;
+                out.result_type = types_.error();
+                return out;
+            }
+            const ty::TypeId value_t = types_.get(elem_t).elem;
+            const CoercionPlan value_plan = classify_assign_with_coercion_(
+                AssignSite::CallArg, value_t,
+                outside_positional[1]->expr, outside_positional[1]->span);
+            if (!value_plan.ok) {
+                add_array_method_diag(
+                    e.span,
+                    outside_positional[1]->span,
+                    "array owner `put` expects a replacement owner assignable to `" + types_.to_string(value_t) + "`",
+                    "this argument does not match the owner element type",
+                    "`put` stores a new owner into the optional slot and returns the previous optional owner",
+                    "pass a value of type `" + types_.to_string(value_t) + "` here");
+                err_(outside_positional[1]->span, "array put value type mismatch");
+                out.ok = false;
+                out.result_type = types_.error();
+                return out;
+            }
+            mark_expr_move_consumed_(outside_positional[1]->expr, value_t, outside_positional[1]->span);
+            mark_symbol_initialized_(*root);
+            cache_array_family_call_(ArrayFamilyCallKind::kOwnerPut);
+            out.ok = true;
+            out.result_type = elem_t;
+            return out;
+        };
+
         auto resolve_owner_decl_sid_for_proto = [&](ty::TypeId owner_t) -> ast::StmtId {
             if (owner_t == ty::kInvalidType) return ast::k_invalid_stmt;
             if (auto it = class_decl_by_type_.find(owner_t); it != class_decl_by_type_.end()) {
@@ -850,6 +1212,16 @@ namespace parus::tyck {
                     }
 
                     if (!is_dot_method_call) {
+                    if (!proto_qualifier.has_value()) {
+                        const auto array_method = try_check_array_family_method_(recv_eid, owner_t, rhs.text, rhs.span);
+                        if (array_method.matched) {
+                            if (!array_method.ok) {
+                                check_all_arg_exprs_only();
+                                return types_.error();
+                            }
+                            return array_method.result_type;
+                        }
+                    }
 
                     auto resolve_owner_type_in_map = [&](auto& method_map, ty::TypeId t) -> ty::TypeId {
                         if (t == ty::kInvalidType) return t;

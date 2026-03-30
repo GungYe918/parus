@@ -111,6 +111,10 @@ namespace parus::sir {
         kMemSwap,
         kMemReplace,
         kMemTake,
+        kArraySwapAt,
+        kArrayOwnerReplaceAt,
+        kArrayOwnerTakeAt,
+        kArrayOwnerPutAt,
     };
 
     /// @brief `~` lowering 시 생성되는 escape handle의 storage kind를 나타낸다.

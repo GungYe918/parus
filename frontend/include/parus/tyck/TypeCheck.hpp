@@ -214,6 +214,14 @@ namespace parus::tyck {
         bool bit_signed = false;
     };
 
+    enum class ArrayFamilyCallKind : uint8_t {
+        kNone = 0,
+        kSwap,
+        kOwnerReplace,
+        kOwnerTake,
+        kOwnerPut,
+    };
+
     struct TyckResult {
         bool ok = true;
         std::vector<ty::TypeId> expr_types; // ast.exprs() index에 대응
@@ -228,6 +236,7 @@ namespace parus::tyck {
         std::vector<uint32_t> expr_external_callee_symbol; // expr index -> direct external callee symbol id
         std::vector<ty::TypeId> expr_external_callee_type; // expr index -> concrete selected external callee fn type
         std::vector<ast::ExprId> expr_external_receiver_expr; // expr index -> implicit receiver expr for external dot-call
+        std::vector<uint8_t> expr_array_family_call_kind; // expr index -> tyck::ArrayFamilyCallKind for compiler-owned sized array methods
         std::vector<uint8_t> expr_call_is_c_abi; // expr index -> call lowers with C ABI
         std::vector<uint8_t> expr_call_is_c_variadic; // expr index -> call is C variadic
         std::vector<ty::CCallConv> expr_call_c_callconv; // expr index -> callsite C callconv
@@ -573,6 +582,7 @@ namespace parus::tyck {
         std::vector<uint32_t> expr_external_callee_symbol_cache_;
         std::vector<ty::TypeId> expr_external_callee_type_cache_;
         std::vector<ast::ExprId> expr_external_receiver_expr_cache_;
+        std::vector<uint8_t> expr_array_family_call_kind_cache_;
         std::vector<uint8_t> expr_call_is_c_abi_cache_;
         std::vector<uint8_t> expr_call_is_c_variadic_cache_;
         std::vector<ty::CCallConv> expr_call_c_callconv_cache_;

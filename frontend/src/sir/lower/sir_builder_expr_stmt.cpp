@@ -565,6 +565,7 @@ namespace parus::sir::detail {
                 bool use_external_callee = false;
                 uint32_t external_callee_sym = k_invalid_symbol;
                 parus::ast::ExprId external_receiver_eid = parus::ast::k_invalid_expr;
+                tyck::ArrayFamilyCallKind array_family_call_kind = tyck::ArrayFamilyCallKind::kNone;
                 if ((size_t)eid < tyck.expr_external_callee_symbol.size()) {
                     external_callee_sym = tyck.expr_external_callee_symbol[eid];
                     use_external_callee = (external_callee_sym != sema::SymbolTable::kNoScope &&
@@ -575,6 +576,10 @@ namespace parus::sir::detail {
                 }
                 if ((size_t)eid < tyck.expr_external_receiver_expr.size()) {
                     external_receiver_eid = tyck.expr_external_receiver_expr[eid];
+                }
+                if ((size_t)eid < tyck.expr_array_family_call_kind.size()) {
+                    array_family_call_kind =
+                        static_cast<tyck::ArrayFamilyCallKind>(tyck.expr_array_family_call_kind[eid]);
                 }
                 if (overload_sid != ast::k_invalid_stmt) {
                     v.callee_sym = resolve_symbol_from_stmt(nres, tyck, overload_sid);
@@ -738,10 +743,73 @@ namespace parus::sir::detail {
                     }
                 }
 
+                auto synthetic_array_receiver_eid_ = [&]() -> parus::ast::ExprId {
+                    if (array_family_call_kind == tyck::ArrayFamilyCallKind::kNone ||
+                        e.a == parus::ast::k_invalid_expr ||
+                        static_cast<size_t>(e.a) >= ast.exprs().size()) {
+                        return parus::ast::k_invalid_expr;
+                    }
+                    const auto& callee_expr = ast.expr(e.a);
+                    if (callee_expr.kind != parus::ast::ExprKind::kBinary ||
+                        callee_expr.op != parus::syntax::TokenKind::kDot ||
+                        callee_expr.a == parus::ast::k_invalid_expr) {
+                        return parus::ast::k_invalid_expr;
+                    }
+                    return callee_expr.a;
+                };
+                auto synthetic_array_elem_type_ = [&](parus::ast::ExprId recv_eid) -> TypeId {
+                    const TypeId recv_ty = best_effort_type_of_ast_expr(ast, sym, nres, tyck, recv_eid);
+                    return array_elem_type_for_sir_build(recv_ty);
+                };
+                auto synth_array_index_place_ = [&](parus::ast::ExprId recv_eid,
+                                                    parus::ast::ExprId idx_eid,
+                                                    TypeId elem_ty,
+                                                    parus::Span span) -> ValueId {
+                    Value place{};
+                    place.kind = ValueKind::kIndex;
+                    place.span = span;
+                    place.type = elem_ty;
+                    place.place_elem_type = elem_ty;
+                    place.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, recv_eid);
+                    place.b = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, idx_eid);
+                    place.place = PlaceClass::kIndex;
+                    place.effect = EffectClass::kPure;
+                    return m.add_value(place);
+                };
+                const bool use_synthetic_array_family_call =
+                    array_family_call_kind != tyck::ArrayFamilyCallKind::kNone;
+                const parus::ast::ExprId array_receiver_eid = synthetic_array_receiver_eid_();
+                const TypeId array_elem_ty =
+                    (array_receiver_eid != parus::ast::k_invalid_expr)
+                        ? synthetic_array_elem_type_(array_receiver_eid)
+                        : k_invalid_type;
+                if (use_synthetic_array_family_call) {
+                    switch (array_family_call_kind) {
+                        case tyck::ArrayFamilyCallKind::kSwap:
+                            v.core_call_kind = CoreCallKind::kArraySwapAt;
+                            v.core_call_type_arg = array_elem_ty;
+                            break;
+                        case tyck::ArrayFamilyCallKind::kOwnerReplace:
+                            v.core_call_kind = CoreCallKind::kArrayOwnerReplaceAt;
+                            v.core_call_type_arg = array_elem_ty;
+                            break;
+                        case tyck::ArrayFamilyCallKind::kOwnerTake:
+                            v.core_call_kind = CoreCallKind::kArrayOwnerTakeAt;
+                            v.core_call_type_arg = array_elem_ty;
+                            break;
+                        case tyck::ArrayFamilyCallKind::kOwnerPut:
+                            v.core_call_kind = CoreCallKind::kArrayOwnerPutAt;
+                            v.core_call_type_arg = array_elem_ty;
+                            break;
+                        case tyck::ArrayFamilyCallKind::kNone:
+                            break;
+                    }
+                }
+
                 // callee
                 if (v.kind == ValueKind::kEnumCtor) {
                     v.a = k_invalid_value;
-                } else if (overload_sid != ast::k_invalid_stmt || use_external_callee) {
+                } else if (overload_sid != ast::k_invalid_stmt || use_external_callee || use_synthetic_array_family_call) {
                     v.a = k_invalid_value;
                 } else {
                     v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
@@ -804,7 +872,58 @@ namespace parus::sir::detail {
                     return {param.type, force_borrow, borrow_is_mut};
                 };
 
-                if (inject_implicit_receiver &&
+                if (use_synthetic_array_family_call &&
+                    array_receiver_eid != parus::ast::k_invalid_expr &&
+                    array_elem_ty != k_invalid_type) {
+                    auto append_synth_arg_ = [&](ValueId value, parus::Span span) {
+                        Arg arg{};
+                        arg.kind = ArgKind::kPositional;
+                        arg.has_label = false;
+                        arg.is_hole = false;
+                        arg.span = span;
+                        arg.value = value;
+                        pending_args.push_back(arg);
+                    };
+                    const auto& args = ast.args();
+                    switch (array_family_call_kind) {
+                        case tyck::ArrayFamilyCallKind::kSwap: {
+                            if (e.arg_count >= 2 &&
+                                e.arg_begin + 1u < args.size()) {
+                                append_synth_arg_(
+                                    synth_array_index_place_(array_receiver_eid, args[e.arg_begin].expr, array_elem_ty, args[e.arg_begin].span),
+                                    args[e.arg_begin].span);
+                                append_synth_arg_(
+                                    synth_array_index_place_(array_receiver_eid, args[e.arg_begin + 1u].expr, array_elem_ty, args[e.arg_begin + 1u].span),
+                                    args[e.arg_begin + 1u].span);
+                            }
+                            break;
+                        }
+                        case tyck::ArrayFamilyCallKind::kOwnerReplace:
+                        case tyck::ArrayFamilyCallKind::kOwnerPut: {
+                            if (e.arg_count >= 2 &&
+                                e.arg_begin + 1u < args.size()) {
+                                append_synth_arg_(
+                                    synth_array_index_place_(array_receiver_eid, args[e.arg_begin].expr, array_elem_ty, args[e.arg_begin].span),
+                                    args[e.arg_begin].span);
+                                append_synth_arg_(
+                                    lower_expr(m, out_has_any_write, ast, sym, nres, tyck, args[e.arg_begin + 1u].expr),
+                                    args[e.arg_begin + 1u].span);
+                            }
+                            break;
+                        }
+                        case tyck::ArrayFamilyCallKind::kOwnerTake: {
+                            if (e.arg_count >= 1 &&
+                                e.arg_begin < args.size()) {
+                                append_synth_arg_(
+                                    synth_array_index_place_(array_receiver_eid, args[e.arg_begin].expr, array_elem_ty, args[e.arg_begin].span),
+                                    args[e.arg_begin].span);
+                            }
+                            break;
+                        }
+                        case tyck::ArrayFamilyCallKind::kNone:
+                            break;
+                    }
+                } else if (inject_implicit_receiver &&
                     receiver_param_index == 0 &&
                     receiver_eid != parus::ast::k_invalid_expr) {
                     Arg recv{};
@@ -829,27 +948,30 @@ namespace parus::sir::detail {
                     pending_args.push_back(recv);
                 }
 
-                for (uint32_t i = 0; i < e.arg_count; ++i) {
-                    const auto& aa = ast.args()[e.arg_begin + i];
-                    Arg parent{};
-                    parent.span = aa.span;
-                    parent.has_label = aa.has_label;
-                    parent.is_hole = aa.is_hole;
-                    parent.label = aa.label;
-                    parent.kind = (aa.kind == parus::ast::ArgKind::kLabeled)
-                        ? ArgKind::kLabeled
-                        : ArgKind::kPositional;
+                if (!use_synthetic_array_family_call) {
+                    for (uint32_t i = 0; i < e.arg_count; ++i) {
+                        const auto& aa = ast.args()[e.arg_begin + i];
+                        Arg parent{};
+                        parent.span = aa.span;
+                        parent.has_label = aa.has_label;
+                        parent.is_hole = aa.is_hole;
+                        parent.label = aa.label;
+                        parent.kind = (aa.kind == parus::ast::ArgKind::kLabeled)
+                            ? ArgKind::kLabeled
+                            : ArgKind::kPositional;
 
-                    if (!aa.is_hole && aa.expr != parus::ast::k_invalid_expr) {
-                        parent.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, aa.expr);
-                    } else {
-                        parent.value = k_invalid_value;
+                        if (!aa.is_hole && aa.expr != parus::ast::k_invalid_expr) {
+                            parent.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, aa.expr);
+                        } else {
+                            parent.value = k_invalid_value;
+                        }
+
+                        pending_args.push_back(parent);
                     }
-
-                    pending_args.push_back(parent);
                 }
 
-                if (inject_implicit_receiver &&
+                if (!use_synthetic_array_family_call &&
+                    inject_implicit_receiver &&
                     receiver_param_index != 0 &&
                     receiver_eid != parus::ast::k_invalid_expr) {
                     Arg recv{};

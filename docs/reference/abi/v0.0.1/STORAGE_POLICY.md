@@ -87,6 +87,8 @@ Parus v0 저장소 클래스는 다음으로 구분한다.
 
 1. 장수명 owner cell이 필요하면 local/field/optional/static place를 사용한다.
 2. sized array container가 필요하면 `(~T)[N]` 또는 `((~T)?)[N]`를 사용한다.
+   - public surface로는 compiler-owned array family method를 사용한다.
+   - `arr.swap(i, j)`, `arr.replace(i, next)`, `arr.take(i)`, `arr.put(i, next)`
 3. storage-safe named aggregate가 필요하면 그 내부 field graph를 `~T`, `(~T)?`, sized owner-array, 다시 storage-safe named aggregate로만 구성한다.
 4. owner payload를 상태기계에 실어야 하면 non-`layout(c)` enum payload에 `~T` / `(~T)?` / sized owner-array를 사용한다.
    - ordinary non-owner payload는 기존처럼 계속 허용된다.

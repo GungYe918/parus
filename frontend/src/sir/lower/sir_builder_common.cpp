@@ -32,6 +32,17 @@ namespace parus::sir::detail {
                g_active_sir_types_->get(tt.elem).kind == parus::ty::Kind::kEscape;
     }
 
+    TypeId array_elem_type_for_sir_build(TypeId t) {
+        if (g_active_sir_types_ == nullptr ||
+            t == k_invalid_type ||
+            static_cast<size_t>(t) >= g_active_sir_types_->count()) {
+            return k_invalid_type;
+        }
+        const auto& tt = g_active_sir_types_->get(t);
+        if (tt.kind != parus::ty::Kind::kArray) return k_invalid_type;
+        return tt.elem;
+    }
+
     TypeId type_of_ast_expr(const tyck::TyckResult& tyck, parus::ast::ExprId eid) {
         if (eid == parus::ast::k_invalid_expr) return k_invalid_type;
         if ((size_t)eid >= tyck.expr_types.size()) return k_invalid_type;
