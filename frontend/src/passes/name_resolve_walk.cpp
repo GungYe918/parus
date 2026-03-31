@@ -1538,6 +1538,37 @@
             return payload.starts_with("parus_c_import|") ||
                    payload.starts_with("parus_c_abi_decl|");
         };
+        auto has_throwing_metadata = [](std::string_view payload) -> bool {
+            size_t pos = 0;
+            while (pos < payload.size()) {
+                size_t next = payload.find('|', pos);
+                if (next == std::string_view::npos) next = payload.size();
+                const std::string_view part = payload.substr(pos, next - pos);
+                if (part == "throwing=1") return true;
+                if (next == payload.size()) break;
+                pos = next + 1;
+            }
+            return false;
+        };
+        auto strip_throwing_metadata = [](std::string_view payload) -> std::string {
+            std::string out{};
+            size_t pos = 0;
+            bool first = true;
+            while (pos < payload.size()) {
+                size_t next = payload.find('|', pos);
+                if (next == std::string_view::npos) next = payload.size();
+                const std::string_view part = payload.substr(pos, next - pos);
+                if (!part.empty() &&
+                    !(part == "throwing=1" || part.starts_with("throwing="))) {
+                    if (!first) out.push_back('|');
+                    out.append(part.data(), part.size());
+                    first = false;
+                }
+                if (next == payload.size()) break;
+                pos = next + 1;
+            }
+            return out;
+        };
 
         auto hidden_external_overload_name = [&](std::string_view visible_name) -> std::string {
             std::string hidden(visible_name);
@@ -1552,6 +1583,20 @@
             const auto names = candidate_names_for_external_export_(ex, opt.current_module_head);
             for (const auto& nm : names) {
                 if (nm.empty()) continue;
+                std::string inst_payload = ex.inst_payload;
+                if (is_c_abi_external_payload(inst_payload) &&
+                    has_throwing_metadata(inst_payload)) {
+                    diag::Diagnostic d(
+                        diag::Severity::kError,
+                        diag::Code::kAbiCExternalThrowingMetadataInvalid,
+                        ex.decl_span
+                    );
+                    d.add_arg(nm);
+                    d.add_note("C ABI and cimport symbols are always non-throwing in the core exception model");
+                    d.add_help("remove 'throwing=1' from the imported metadata, or bridge through a Parus wrapper");
+                    bag.add(std::move(d));
+                    inst_payload = strip_throwing_metadata(inst_payload);
+                }
 
                 if (auto existing = sym.lookup(nm)) {
                     const auto& old = sym.symbol(*existing);
@@ -1569,7 +1614,7 @@
                     } else if (ex.kind == sema::SymbolKind::kFn &&
                                old.is_external &&
                                !is_c_abi_external_payload(old.external_payload) &&
-                               !is_c_abi_external_payload(ex.inst_payload)) {
+                               !is_c_abi_external_payload(inst_payload)) {
                         const std::string hidden_name = hidden_external_overload_name(nm);
                         auto ins = declare_(
                             ex.kind,
@@ -1590,7 +1635,7 @@
                         se.decl_module_head = ex.module_head;
                         se.decl_source_dir_norm = ex.decl_source_dir_norm;
                         se.link_name = ex.link_name;
-                        se.external_payload = ex.inst_payload;
+                        se.external_payload = inst_payload;
                         se.is_export = ex.is_export;
                         se.is_external = true;
                     } else {
@@ -1598,8 +1643,8 @@
                         if (ex.kind == sema::SymbolKind::kFn && !ex.link_name.empty() && cur.link_name.empty()) {
                             cur.link_name = ex.link_name;
                         }
-                        if (cur.external_payload.empty() && !ex.inst_payload.empty()) {
-                            cur.external_payload = ex.inst_payload;
+                        if (cur.external_payload.empty() && !inst_payload.empty()) {
+                            cur.external_payload = inst_payload;
                         }
                     }
                     continue;
@@ -1622,7 +1667,7 @@
                 se.decl_module_head = ex.module_head;
                 se.decl_source_dir_norm = ex.decl_source_dir_norm;
                 se.link_name = ex.link_name;
-                se.external_payload = ex.inst_payload;
+                se.external_payload = inst_payload;
                 se.is_export = ex.is_export;
                 se.is_external = true;
             }

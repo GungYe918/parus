@@ -1325,7 +1325,7 @@ namespace parusc::p0 {
                     }
                 }
                 append_generic_decl_payload_(inst_payload, ast, s, types);
-                if (s.is_throwing) {
+                if (s.is_throwing && s.link_abi != parus::ast::LinkAbi::kC) {
                     if (!inst_payload.empty()) inst_payload += "|";
                     inst_payload += "throwing=1";
                 }
@@ -1430,7 +1430,7 @@ namespace parusc::p0 {
                         }
                         append_generic_decl_payload_(payload, ast, s, types);
                         append_generic_decl_payload_(payload, ast, ms, types);
-                        if (ms.is_throwing) {
+                        if (ms.is_throwing && ms.link_abi != parus::ast::LinkAbi::kC) {
                             if (!payload.empty()) payload += "|";
                             payload += "throwing=1";
                         }

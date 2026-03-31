@@ -3604,6 +3604,66 @@ namespace {
         return ok;
     }
 
+    static bool test_c_abi_export_throwing_fn_rejected() {
+        const std::string src = R"(
+            export "C" def danger?() -> i32 {
+                return 1i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kAbiCThrowingFnNotAllowed),
+            "export C throwing function must emit AbiCThrowingFnNotAllowed");
+        return ok;
+    }
+
+    static bool test_external_c_abi_throwing_metadata_rejected() {
+        const std::string src = R"(
+            def main() -> i32 {
+                return bad();
+            }
+        )";
+
+        auto p = parse_program(src);
+        if (!run_macro_and_type(p)) return false;
+
+        parus::passes::PassOptions opt{};
+        opt.name_resolve.external_exports.push_back({
+            .kind = parus::sema::SymbolKind::kFn,
+            .path = "bad",
+            .link_name = "bad",
+            .declared_type = p.types.make_fn(
+                p.types.builtin(parus::ty::Builtin::kI32),
+                nullptr,
+                0,
+                0,
+                nullptr,
+                nullptr,
+                /*is_c_abi=*/true,
+                /*is_c_variadic=*/false,
+                parus::ty::CCallConv::kDefault
+            ),
+            .declared_type_repr = {},
+            .declared_type_semantic = {},
+            .decl_span = {},
+            .decl_bundle_name = "ffi",
+            .module_head = {},
+            .decl_source_dir_norm = {},
+            .is_export = true,
+            .inst_payload = "parus_c_abi_decl|is_c_abi=1|callconv=default|variadic=0|throwing=1",
+        });
+        (void)parus::passes::run_on_program(p.ast, p.root, p.bag, opt);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kAbiCExternalThrowingMetadataInvalid),
+            "malformed imported C ABI throwing metadata must emit AbiCExternalThrowingMetadataInvalid");
+        return ok;
+    }
+
     static bool test_field_export_disallowed() {
         const std::string src = R"(
             export struct layout(c) Vec2 {
@@ -3756,6 +3816,26 @@ namespace {
         bool ok = true;
         ok &= require_(count_diag_code_(p.bag, parus::diag::Code::kTryExprOperandMustBeThrowingCall) == 1,
             "try expr over non-throwing call must emit TryExprOperandMustBeThrowingCall exactly once");
+        return ok;
+    }
+
+    static bool test_try_expr_c_abi_call_rejected() {
+        const std::string src = R"(
+            extern "C" def c_add(a: i32, b: i32) -> i32;
+
+            def run() -> i32 {
+                set v = try c_add(1i32, 2i32);
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(count_diag_code_(p.bag, parus::diag::Code::kTryExprCAbiCallNotAllowed) == 1,
+            "try expr over C ABI call must emit TryExprCAbiCallNotAllowed exactly once");
         return ok;
     }
 
@@ -4163,12 +4243,15 @@ int main() {
         {"c_abi_global_requires_static", test_c_abi_global_requires_static},
         {"c_abi_layout_c_field_ok", test_c_abi_layout_c_field_ok},
         {"c_abi_reject_non_layout_field", test_c_abi_reject_non_layout_field},
+        {"c_abi_export_throwing_fn_rejected", test_c_abi_export_throwing_fn_rejected},
+        {"external_c_abi_throwing_metadata_rejected", test_external_c_abi_throwing_metadata_rejected},
         {"field_export_disallowed", test_field_export_disallowed},
         {"var_mut_prefix_forbidden_on_set", test_var_mut_prefix_forbidden_on_set},
         {"var_mut_prefix_forbidden_on_static", test_var_mut_prefix_forbidden_on_static},
         {"try_catch_ast_shape_parsed", test_try_catch_ast_shape_parsed},
         {"try_expr_is_unary_try", test_try_expr_is_unary_try},
         {"try_expr_operand_must_be_throwing_call_single_core", test_try_expr_operand_must_be_throwing_call_single_core},
+        {"try_expr_c_abi_call_rejected", test_try_expr_c_abi_call_rejected},
         {"try_expr_throwing_escape_call_returns_optional_owner", test_try_expr_throwing_escape_call_returns_optional_owner},
         {"untyped_catch_binder_is_rethrow_only", test_untyped_catch_binder_is_rethrow_only},
         {"throw_payload_rejects_nested_owner_handle", test_throw_payload_rejects_nested_owner_handle},

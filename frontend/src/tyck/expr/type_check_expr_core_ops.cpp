@@ -749,6 +749,24 @@
             ty::TypeId at = check_expr_(e.a);
             in_try_expr_context_ = saved_try_ctx;
 
+            const bool is_c_abi_call =
+                (size_t)e.a < expr_call_is_c_abi_cache_.size() &&
+                expr_call_is_c_abi_cache_[e.a] != 0u;
+            if (is_c_abi_call) {
+                diag::Diagnostic d(
+                    diag::Severity::kError,
+                    diag::Code::kTryExprCAbiCallNotAllowed,
+                    e.span
+                );
+                d.add_label(ast_.expr(e.a).span, "this call uses the C ABI boundary");
+                d.add_note("C ABI and cimport calls are always non-throwing in the core exception model");
+                d.add_help("call the foreign function directly, or wrap it in a Parus '?' helper and convert the boundary explicitly");
+                if (diag_bag_) diag_bag_->add(std::move(d));
+                err_(e.span, "try expression must not wrap a C ABI or cimport call");
+                fn_ctx_.has_exception_construct = true;
+                return types_.error();
+            }
+
             bool is_throwing_call = false;
             if ((size_t)e.a < expr_overload_target_cache_.size()) {
                 const ast::StmtId target_sid = expr_overload_target_cache_[e.a];

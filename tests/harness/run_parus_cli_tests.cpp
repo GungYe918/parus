@@ -8343,6 +8343,195 @@ bool test_exception_throwing_call_requires_try_expr() {
     return true;
 }
 
+bool test_exception_export_c_throwing_decl_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-exception-export-c-throwing-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "export \"C\" def api?() -> i32 {\n"
+        "  return 1i32;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write export C throwing rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture("\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc == 0) {
+        std::cerr << "export C throwing declaration must fail\n" << out;
+        return false;
+    }
+    if (!contains(out, "AbiCThrowingFnNotAllowed") || !contains(out, "convert exception channel at boundary")) {
+        std::cerr << "export C throwing rejection must explain FFI boundary conversion\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_exception_try_expr_c_abi_call_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-exception-try-cabi-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "extern \"C\" def abs(x: i32) -> i32;\n"
+        "def main() -> i32 {\n"
+        "  set v = try abs(-7i32);\n"
+        "  return v ?? 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write try-over-C-ABI rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture("\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc == 0) {
+        std::cerr << "try over C ABI call must fail\n" << out;
+        return false;
+    }
+    if (!contains(out, "TryExprCAbiCallNotAllowed") || !contains(out, "explicit wrapper")) {
+        std::cerr << "try over C ABI call rejection must explain explicit wrapper guidance\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_exception_try_expr_cimport_call_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-exception-try-cimport-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "ffi.h";
+    const auto main_pr = temp_root / "main.pr";
+    const std::string header_src =
+        "#ifndef PARUS_FFI_H\n"
+        "#define PARUS_FFI_H\n"
+        "int c_add(int a, int b);\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"ffi.h\" as ffi;\n"
+        "def main() -> i32 {\n"
+        "  set v = try ffi::c_add(1i32, 2i32);\n"
+        "  return v ?? 0i32;\n"
+        "}\n";
+    if (!write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write try-over-cimport rejection test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture("\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc != 0 && contains(out, "CImportLibClangUnavailable")) {
+        return true;
+    }
+    if (rc == 0) {
+        std::cerr << "try over cimport call must fail\n" << out;
+        return false;
+    }
+    if (!contains(out, "TryExprCAbiCallNotAllowed") || !contains(out, "explicit wrapper")) {
+        std::cerr << "try over cimport call rejection must explain explicit wrapper guidance\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_exception_c_abi_wrapper_runtime() {
+    const std::string bin = PARUS_BUILD_BIN;
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for C ABI wrapper runtime test\n";
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-exception-cabi-wrapper-runtime";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "main";
+    const std::string src =
+        "proto Recoverable {};\n"
+        "struct IoErr: Recoverable { code: i32; };\n"
+        "extern \"C\" def abs(x: i32) -> i32;\n"
+        "def checked?(x: i32) -> i32 {\n"
+        "  let rc: i32 = abs(x);\n"
+        "  if (rc < 0i32) {\n"
+        "    throw IoErr { code: rc };\n"
+        "  }\n"
+        "  return rc;\n"
+        "}\n"
+        "export \"C\" def checked_c(x: i32) -> i32 {\n"
+        "  set mut rc = try checked(x);\n"
+        "  let v: i32 = rc else {\n"
+        "    return -1i32;\n"
+        "  };\n"
+        "  return v;\n"
+        "}\n"
+        "def main() -> i32 {\n"
+        "  return checked_c(-7i32);\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write C ABI wrapper runtime test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_build, out_build] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    if (rc_build != 0) {
+        std::cerr << "C ABI wrapper runtime sample should compile/link\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_run, out_run] = run_capture("\"" + exe.string() + "\"; echo EXIT:$?");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_run != 0) {
+        std::cerr << "C ABI wrapper runtime sample should execute\n" << out_run;
+        return false;
+    }
+    if (!contains(out_run, "EXIT:7")) {
+        std::cerr << "C ABI wrapper runtime exit mismatch (expected 7)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
 bool test_escape_unsized_owner_array_rejected() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -9601,6 +9790,10 @@ int main() {
     const bool ok120 = test_exception_typed_catch_owner_handle_rejected();
     const bool ok121 = test_exception_untyped_catch_binder_misuse_rejected();
     const bool ok122 = test_exception_throwing_call_requires_try_expr();
+    const bool ok123 = test_exception_export_c_throwing_decl_rejected();
+    const bool ok124 = test_exception_try_expr_c_abi_call_rejected();
+    const bool ok125 = test_exception_try_expr_cimport_call_rejected();
+    const bool ok126 = test_exception_c_abi_wrapper_runtime();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
@@ -9612,7 +9805,8 @@ int main() {
         !ok83 || !ok84 || !ok85 || !ok86 || !ok87 || !ok88 || !ok89 || !ok90 || !ok91 || !ok92 || !ok93 || !ok94 ||
         !ok95 || !ok96 || !ok97 || !ok98 || !ok99 || !ok100 || !ok101 || !ok102 || !ok103 || !ok104 || !ok105 ||
         !ok106 || !ok107 || !ok108 || !ok109 || !ok110 || !ok111 || !ok112 || !ok113 || !ok114 || !ok115 ||
-        !ok116 || !ok117 || !ok118 || !ok119 || !ok120 || !ok121 || !ok122) {
+        !ok116 || !ok117 || !ok118 || !ok119 || !ok120 || !ok121 || !ok122 || !ok123 || !ok124 || !ok125 ||
+        !ok126) {
         return 1;
     }
 

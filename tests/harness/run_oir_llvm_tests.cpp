@@ -980,6 +980,59 @@ namespace {
         return emit_object_for_test_case_(lowered.llvm_ir, "exception_payload_rethrow_patterns");
     }
 
+    static bool test_c_abi_exception_boundary_stays_non_throwing_llvm_patterns_() {
+        const std::string src = R"(
+            extern "C" def c_abs(x: i32) -> i32;
+
+            def checked?() -> i32 {
+                return c_abs(-7i32);
+            }
+
+            def main() -> i32 {
+                set v = try checked();
+                return v ?? -1i32;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "C ABI exception-boundary case must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        bool saw_checked_with_exc_ctx = false;
+        bool saw_c_abs_without_exc_ctx = false;
+        for (const auto& fn : p->oir.mod.funcs) {
+            if (fn.source_name == "checked") {
+                saw_checked_with_exc_ctx = (fn.exc_ctx_param_index != parus::oir::kInvalidId);
+            }
+            if (fn.source_name == "c_abs" || fn.name == "c_abs") {
+                saw_c_abs_without_exc_ctx = (fn.exc_ctx_param_index == parus::oir::kInvalidId);
+            }
+        }
+        ok &= require_(saw_checked_with_exc_ctx,
+                       "throwing Parus wrapper must still receive hidden exc_ctx");
+        ok &= require_(saw_c_abs_without_exc_ctx,
+                       "C ABI callee must not receive hidden exc_ctx");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        ok &= require_(lowered.ok, "LLVM text lowering for C ABI exception-boundary case must succeed");
+        ok &= require_(lowered.llvm_ir.find("declare i32 @c_abs(i32)") != std::string::npos,
+                       "C ABI declaration must keep an ordinary non-throwing signature");
+        ok &= require_(lowered.llvm_ir.find("call i32 @c_abs(i32") != std::string::npos,
+                       "C ABI call must stay an ordinary call without hidden exc_ctx argument");
+        ok &= require_(lowered.llvm_ir.find(" invoke ") == std::string::npos,
+                       "C ABI exception-boundary lowering must not introduce invoke");
+        ok &= require_(lowered.llvm_ir.find("landingpad") == std::string::npos,
+                       "C ABI exception-boundary lowering must not introduce landingpad");
+        if (!ok) return false;
+        return emit_object_for_test_case_(lowered.llvm_ir, "c_abi_exception_boundary_non_throwing_patterns");
+    }
+
     /// @brief nest 경로 함수가 namespace 포함 맹글 심볼로 내려가고 direct call되는지 검사한다.
     static bool test_nest_path_mangling_and_direct_call_() {
         const std::string src = R"(
@@ -2374,6 +2427,7 @@ int main() {
         {"overload_and_operator_lowering_patterns", test_overload_and_operator_lowering_patterns_},
         {"copy_clone_operator_and_builtin_lowering_patterns", test_copy_clone_operator_and_builtin_lowering_patterns_},
         {"exception_payload_and_rethrow_llvm_patterns", test_exception_payload_and_rethrow_llvm_patterns_},
+        {"c_abi_exception_boundary_stays_non_throwing_llvm_patterns", test_c_abi_exception_boundary_stays_non_throwing_llvm_patterns_},
         {"nest_path_mangling_and_direct_call", test_nest_path_mangling_and_direct_call_},
         {"import_alias_path_resolution_to_llvm", test_import_alias_path_resolution_to_llvm_},
         {"switch_stmt_lowering_cfg", test_switch_stmt_lowering_cfg_},

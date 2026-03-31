@@ -11,7 +11,8 @@ umbrella 방향성은 `docs/todo/CORE_FREESTANDING_BOOTSTRAP_PLAN.md`가 맡고,
 1. `~` core semantics는 owner-handle model 기준으로 freeze-ready다.
 2. Recoverable 예외 코어는 non-unwind 값 채널로 고정되었다.
 3. panic 기본 정책은 `abort/trap`이며, unwind는 hosted/interop 후속 레이어 과제다.
-4. alloc-backed dynamic owner container surface(`Vec<(~T)?>` 등)는 core가 아니라 alloc/std 후속 과제다.
+4. C ABI / `cimport` 경계는 항상 non-throwing이며, Recoverable은 명시적 wrapper에서만 변환한다.
+5. alloc-backed dynamic owner container surface(`Vec<(~T)?>` 등)는 core가 아니라 alloc/std 후속 과제다.
 
 ## 원칙
 

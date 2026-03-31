@@ -511,6 +511,10 @@ namespace parus::oir {
         }
 
         bool parse_external_throwing_payload_(std::string_view payload) {
+            if (payload.starts_with("parus_c_import|") ||
+                payload.starts_with("parus_c_abi_decl|")) {
+                return false;
+            }
             size_t pos = 0;
             while (pos < payload.size()) {
                 size_t next = payload.find('|', pos);

@@ -208,12 +208,14 @@ Parus v0는 예외 채널을 2개로 분리한다.
 또한 Recoverable payload는 value-only이며 owner-handle payload(`~T`)를 포함할 수 없다.
 Recoverable ABI는 hidden `exc_ctx*`와 single thread-local root exception context를 사용한다.
 ordinary `?` 함수의 정상 경로는 caller-provided context 전달과 local check만 부담한다.
+C ABI / `cimport` 호출은 Recoverable source가 아니며 hidden `exc_ctx*`를 받지 않는다.
 
 1. `extern "C"` 호출로 들어온 경계에서 언와인드가 외부로 전파되면 안 된다.
 2. `export "C"` 함수도 C ABI 경계 밖으로 언와인드를 전파하지 않는다.
 3. C/C++ 경계의 foreign unwind 브리지는 hosted/interop 후속 레이어에서 opt-in으로 제공한다.
 4. Recoverable(`throw`)는 ABI 경계에서 값으로 변환하거나 명시 반환 채널로 브리지해야 한다.
-5. ordinary Recoverable lowering은 `invoke`, `landingpad`, `resume`, personality 기반 EH를 사용하지 않는다.
+5. `try expr`는 throwing Parus call에만 적용되며, `extern "C"` / `cimport` 호출에는 사용할 수 없다.
+6. ordinary Recoverable lowering은 `invoke`, `landingpad`, `resume`, personality 기반 EH를 사용하지 않는다.
 
 ### 8.1 C import TLS/Thread 경계 (고정)
 

@@ -191,6 +191,7 @@ namespace parus::diag {
             case Code::kThrowOnlyInThrowingFn: return "ThrowOnlyInThrowingFn";
             case Code::kTryCatchOnlyInThrowingFn: return "TryCatchOnlyInThrowingFn";
             case Code::kTryExprOperandMustBeThrowingCall: return "TryExprOperandMustBeThrowingCall";
+            case Code::kTryExprCAbiCallNotAllowed: return "TryExprCAbiCallNotAllowed";
             case Code::kThrowingCallRequiresTryExpr: return "ThrowingCallRequiresTryExpr";
             case Code::kThrowPayloadTypeNotAllowed: return "ThrowPayloadTypeNotAllowed";
             case Code::kThrowPayloadMustBeRecoverable: return "ThrowPayloadMustBeRecoverable";
@@ -306,6 +307,7 @@ namespace parus::diag {
             case Code::kAbiCNamedGroupNotAllowed:return "AbiCNamedGroupNotAllowed";
             case Code::kAbiCTypeNotFfiSafe:return "AbiCTypeNotFfiSafe";
             case Code::kAbiCThrowingFnNotAllowed:return "AbiCThrowingFnNotAllowed";
+            case Code::kAbiCExternalThrowingMetadataInvalid:return "AbiCExternalThrowingMetadataInvalid";
             case Code::kAbiCGlobalMustBeStatic:return "AbiCGlobalMustBeStatic";
             case Code::kTypeReturnOutsideFn:  return "TypeReturnOutsideFn";
             case Code::kTypeReturnExprRequired:return "TypeReturnExprRequired";
@@ -567,6 +569,7 @@ namespace parus::diag {
             case Code::kThrowOnlyInThrowingFn: return "throw is only allowed inside throwing ('?') functions";
             case Code::kTryCatchOnlyInThrowingFn: return "try-catch is only allowed inside throwing ('?') functions";
             case Code::kTryExprOperandMustBeThrowingCall: return "try expression operand must be a throwing ('?') function call";
+            case Code::kTryExprCAbiCallNotAllowed: return "try expression must not wrap a C ABI or cimport call; convert the boundary in an explicit wrapper";
             case Code::kThrowingCallRequiresTryExpr: return "direct call to throwing function is not allowed here; wrap the call with 'try <call>'";
             case Code::kThrowPayloadTypeNotAllowed: return "throw payload type is not allowed in v0 (expected enum/struct, got {0})";
             case Code::kThrowPayloadMustBeRecoverable: return "throw payload must satisfy Recoverable proto (got {0})";
@@ -684,6 +687,7 @@ namespace parus::diag {
             case Code::kAbiCNamedGroupNotAllowed: return "C ABI function '{0}' must not use named-group parameters";
             case Code::kAbiCTypeNotFfiSafe: return "C ABI requires FFI-safe type for {0}; got '{1}'";
             case Code::kAbiCThrowingFnNotAllowed: return "C ABI function '{0}' must not be throwing ('?'); convert exception channel at boundary";
+            case Code::kAbiCExternalThrowingMetadataInvalid: return "imported C ABI symbol '{0}' must not carry throwing metadata; C ABI functions are always non-throwing";
             case Code::kAbiCGlobalMustBeStatic: return "C ABI global '{0}' must be declared with 'static'";
             case Code::kTypeReturnOutsideFn:  return "return outside of function";
             case Code::kTypeReturnExprRequired: return "return expression is required (function does not return void)";
@@ -949,6 +953,7 @@ namespace parus::diag {
             case Code::kThrowOnlyInThrowingFn: return "throw는 throwing('?') 함수 내부에서만 사용할 수 있습니다";
             case Code::kTryCatchOnlyInThrowingFn: return "try-catch는 throwing('?') 함수 내부에서만 사용할 수 있습니다";
             case Code::kTryExprOperandMustBeThrowingCall: return "try 식의 피연산자는 throwing('?') 함수 호출이어야 합니다";
+            case Code::kTryExprCAbiCallNotAllowed: return "try 식은 C ABI 또는 cimport 호출을 감쌀 수 없습니다. 명시적 wrapper에서 경계를 변환하세요";
             case Code::kThrowingCallRequiresTryExpr: return "여기서는 throwing 함수 직접 호출이 허용되지 않습니다. 'try <call>'로 감싸야 합니다";
             case Code::kThrowPayloadTypeNotAllowed: return "v0에서 throw payload 타입이 허용되지 않습니다(enum/struct 필요, 현재 {0})";
             case Code::kThrowPayloadMustBeRecoverable: return "throw payload는 Recoverable proto를 만족해야 합니다(현재 {0})";
@@ -1069,6 +1074,7 @@ namespace parus::diag {
             case Code::kAbiCNamedGroupNotAllowed: return "C ABI 함수 '{0}'는 named-group 파라미터를 사용할 수 없습니다";
             case Code::kAbiCTypeNotFfiSafe: return "C ABI의 {0}에는 FFI-safe 타입만 허용됩니다. 현재 타입: '{1}'";
             case Code::kAbiCThrowingFnNotAllowed: return "C ABI 함수 '{0}'는 throwing('?')일 수 없습니다. 경계에서 예외 채널을 변환하세요";
+            case Code::kAbiCExternalThrowingMetadataInvalid: return "imported C ABI 심볼 '{0}'에는 throwing 메타데이터를 붙일 수 없습니다. C ABI 함수는 항상 non-throwing입니다";
             case Code::kAbiCGlobalMustBeStatic: return "C ABI 전역 '{0}'는 반드시 'static'으로 선언해야 합니다";
             case Code::kTypeReturnOutsideFn:  return "함수 밖에서 return을 사용할 수 없습니다";
             case Code::kTypeReturnExprRequired:return "return에는 식이 필요합니다(현재 반환 타입이 void가 아닙니다)";

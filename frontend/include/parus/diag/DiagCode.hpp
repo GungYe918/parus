@@ -185,6 +185,7 @@ namespace parus::diag {
         kThrowOnlyInThrowingFn,           // throw is only allowed in throwing ('?') function
         kTryCatchOnlyInThrowingFn,        // try-catch is only allowed in throwing ('?') function
         kTryExprOperandMustBeThrowingCall,// try expr operand must be throwing call expression
+        kTryExprCAbiCallNotAllowed,       // try expr must not wrap C ABI/cimport call
         kThrowingCallRequiresTryExpr,     // direct ? -> non-? call must use try expr
         kThrowPayloadTypeNotAllowed,      // throw payload must be enum/struct value
         kThrowPayloadMustBeRecoverable,   // throw payload must satisfy Recoverable proto
@@ -326,6 +327,7 @@ namespace parus::diag {
         kAbiCNamedGroupNotAllowed, // args[0]=def
         kAbiCTypeNotFfiSafe,       // args[0]=entity, args[1]=type
         kAbiCThrowingFnNotAllowed, // args[0]=def
+        kAbiCExternalThrowingMetadataInvalid, // args[0]=symbol
         kAbiCGlobalMustBeStatic,   // args[0]=name
         kTypeReturnOutsideFn,   // (no args)
         kTypeReturnExprRequired,// (no args)
