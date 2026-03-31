@@ -176,6 +176,19 @@ namespace parus::tyck {
             }
             return out;
         }
+
+        bool parse_external_throwing_payload_(std::string_view payload) {
+            size_t pos = 0;
+            while (pos < payload.size()) {
+                size_t next = payload.find('|', pos);
+                if (next == std::string_view::npos) next = payload.size();
+                const std::string_view part = payload.substr(pos, next - pos);
+                if (part == "throwing=1") return true;
+                if (next == payload.size()) break;
+                pos = next + 1;
+            }
+            return false;
+        }
     } // namespace
 
     ty::TypeId TypeChecker::check_expr_call_(ast::Expr e) {
@@ -3057,6 +3070,17 @@ namespace parus::tyck {
 
             if (selected_external_sym != sema::SymbolTable::kNoScope &&
                 selected_external_fn_type != ty::kInvalidType) {
+                const bool external_is_throwing =
+                    (selected_external_sym < sym_.symbols().size()) &&
+                    parse_external_throwing_payload_(sym_.symbol(selected_external_sym).external_payload);
+                if (external_is_throwing &&
+                    !in_try_expr_context_ &&
+                    !fn_ctx_.is_throwing) {
+                    diag_(diag::Code::kThrowingCallRequiresTryExpr, e.span);
+                    err_(e.span, "non-throwing function must use try expression for external throwing call");
+                    check_all_arg_exprs_only();
+                    return {true, types_.error()};
+                }
                 if (selected_external_is_template) {
                     if (diag_bag_) {
                         diag::Diagnostic d(
@@ -3907,6 +3931,15 @@ namespace parus::tyck {
                 if (call_expr_id != ast::k_invalid_expr &&
                     call_expr_id < expr_external_receiver_expr_cache_.size()) {
                     expr_external_receiver_expr_cache_[call_expr_id] = receiver_eid;
+                }
+                if (selected_external_sym < sym_.symbols().size() &&
+                    parse_external_throwing_payload_(sym_.symbol(selected_external_sym).external_payload) &&
+                    !in_try_expr_context_ &&
+                    !fn_ctx_.is_throwing) {
+                    diag_(diag::Code::kThrowingCallRequiresTryExpr, e.span);
+                    err_(e.span, "non-throwing function must use try expression for external throwing acts call");
+                    check_all_arg_exprs_only();
+                    return types_.error();
                 }
                 return types_.get(selected_external_fn_type).ret;
             }
@@ -5522,8 +5555,7 @@ namespace parus::tyck {
                 selected_decl.is_throwing &&
                 !in_try_expr_context_ &&
                 !fn_ctx_.is_throwing) {
-                diag_(diag::Code::kTypeErrorGeneric, e.span,
-                      "direct call to throwing function is not allowed here; wrap the call with 'try <call>'");
+                diag_(diag::Code::kThrowingCallRequiresTryExpr, e.span);
                 err_(e.span, "non-throwing function must use try expression for throwing call");
                 check_all_arg_exprs_only();
                 return types_.error();

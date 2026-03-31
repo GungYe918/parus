@@ -185,10 +185,12 @@ namespace parus::diag {
         kThrowOnlyInThrowingFn,           // throw is only allowed in throwing ('?') function
         kTryCatchOnlyInThrowingFn,        // try-catch is only allowed in throwing ('?') function
         kTryExprOperandMustBeThrowingCall,// try expr operand must be throwing call expression
+        kThrowingCallRequiresTryExpr,     // direct ? -> non-? call must use try expr
         kThrowPayloadTypeNotAllowed,      // throw payload must be enum/struct value
         kThrowPayloadMustBeRecoverable,   // throw payload must satisfy Recoverable proto
         kTryCatchNeedsAtLeastOneCatch,    // try block requires at least one catch clause
         kCatchBinderNameExpected,         // catch (...) binder name expected
+        kUntypedCatchBinderRethrowOnly,   // catch(e) binder is an opaque rethrow token
         kTryCatchExpectedCatchClause,     // try block must be followed by catch clause(s)
         kExceptionLoweringDeferredV0,     // exception lowering is deferred in v0
 

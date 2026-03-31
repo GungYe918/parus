@@ -1325,6 +1325,10 @@ namespace parusc::p0 {
                     }
                 }
                 append_generic_decl_payload_(inst_payload, ast, s, types);
+                if (s.is_throwing) {
+                    if (!inst_payload.empty()) inst_payload += "|";
+                    inst_payload += "throwing=1";
+                }
                 push_export(parus::sema::SymbolKind::kFn, qname, s.type, s.is_export, s.span, link_name, std::move(inst_payload));
                 return;
             }
@@ -1426,6 +1430,10 @@ namespace parusc::p0 {
                         }
                         append_generic_decl_payload_(payload, ast, s, types);
                         append_generic_decl_payload_(payload, ast, ms, types);
+                        if (ms.is_throwing) {
+                            if (!payload.empty()) payload += "|";
+                            payload += "throwing=1";
+                        }
 
                         parus::ty::TypeId export_member_type = ms.type;
                         if (s.acts_is_for && export_member_type != parus::ty::kInvalidType) {

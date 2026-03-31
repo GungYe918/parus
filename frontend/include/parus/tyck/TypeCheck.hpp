@@ -767,6 +767,7 @@ namespace parus::tyck {
         // catch(e) untyped binder symbols:
         // - used to allow `throw e` rethrow in v0.
         std::unordered_set<uint32_t> untyped_catch_binder_symbols_;
+        bool allow_untyped_catch_binder_rethrow_use_ = false;
 
         // qualified-name -> overloaded def decl stmt ids
         // NOTE: std::string을 key로 쓰는 이유:

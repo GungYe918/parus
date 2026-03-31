@@ -3759,6 +3759,127 @@ namespace {
         return ok;
     }
 
+    static bool test_try_expr_throwing_escape_call_returns_optional_owner() {
+        const std::string src = R"(
+            proto Recoverable {};
+
+            struct LoadErr: Recoverable {
+                code: i32;
+            };
+
+            class Worker {
+                value: i32;
+
+                init(v: i32) {
+                    self.value = v;
+                }
+            }
+
+            def load?(ok: bool) -> ~Worker {
+                if (ok) {
+                    set w = Worker(7i32);
+                    return ~w;
+                }
+                throw LoadErr { code: 1i32 };
+            }
+
+            def main() -> i32 {
+                let h: (~Worker)? = try load(false);
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        parus::ast::ExprId try_eid = parus::ast::k_invalid_expr;
+        for (uint32_t i = 0; i < p.ast.exprs().size(); ++i) {
+            const auto& e = p.ast.exprs()[i];
+            if (e.kind == parus::ast::ExprKind::kUnary &&
+                e.op == parus::syntax::TokenKind::kKwTry) {
+                try_eid = i;
+                break;
+            }
+        }
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "try expr over throwing ~ return must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "try expr over throwing ~ return must typecheck");
+        ok &= require_(try_eid != parus::ast::k_invalid_expr, "test source must contain a try expression");
+        if (!ok) return false;
+
+        const auto try_ty = ty.expr_types[try_eid];
+        ok &= require_(try_ty != parus::ty::kInvalidType, "try expression must have a concrete type");
+        if (!ok) return false;
+        const auto& tt = p.types.get(try_ty);
+        ok &= require_(tt.kind == parus::ty::Kind::kOptional, "try expression over ~ return must produce an optional");
+        ok &= require_(tt.elem != parus::ty::kInvalidType &&
+                           p.types.get(tt.elem).kind == parus::ty::Kind::kEscape,
+                       "try expression over ~ return must produce (~T)?");
+        return ok;
+    }
+
+    static bool test_untyped_catch_binder_is_rethrow_only() {
+        const std::string src = R"(
+            proto Recoverable {};
+
+            struct Err: Recoverable {
+                code: i32;
+            };
+
+            def leaf?() -> i32 {
+                throw Err { code: 1i32 };
+            }
+
+            def main?() -> i32 {
+                try {
+                    return leaf();
+                } catch (e) {
+                    let x: i64 = e;
+                    return 0i32;
+                }
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(count_diag_code_(p.bag, parus::diag::Code::kUntypedCatchBinderRethrowOnly) == 1,
+            "untyped catch binder misuse must emit UntypedCatchBinderRethrowOnly exactly once");
+        return ok;
+    }
+
+    static bool test_throw_payload_rejects_nested_owner_handle() {
+        const std::string src = R"(
+            proto Recoverable {};
+
+            class Worker {
+                init() = default;
+            }
+
+            struct Err: Recoverable {
+                worker: ~Worker;
+            };
+
+            def main?() -> i32 {
+                set w = Worker();
+                throw Err { worker: ~w };
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(count_diag_code_(p.bag, parus::diag::Code::kThrowPayloadTypeNotAllowed) >= 1,
+            "throw payload containing nested owner-handle must be rejected");
+        return ok;
+    }
+
     static bool test_generic_proto_target_arity_reports_once() {
         const std::string src = R"(
             proto Holder<T> {
@@ -4048,6 +4169,9 @@ int main() {
         {"try_catch_ast_shape_parsed", test_try_catch_ast_shape_parsed},
         {"try_expr_is_unary_try", test_try_expr_is_unary_try},
         {"try_expr_operand_must_be_throwing_call_single_core", test_try_expr_operand_must_be_throwing_call_single_core},
+        {"try_expr_throwing_escape_call_returns_optional_owner", test_try_expr_throwing_escape_call_returns_optional_owner},
+        {"untyped_catch_binder_is_rethrow_only", test_untyped_catch_binder_is_rethrow_only},
+        {"throw_payload_rejects_nested_owner_handle", test_throw_payload_rejects_nested_owner_handle},
         {"generic_proto_target_arity_reports_once", test_generic_proto_target_arity_reports_once},
         {"generic_proto_target_not_found_reports_once", test_generic_proto_target_not_found_reports_once},
         {"generic_type_eq_constraints_work", test_generic_type_eq_constraints_work},

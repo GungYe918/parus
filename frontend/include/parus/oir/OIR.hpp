@@ -261,6 +261,8 @@ namespace parus::oir {
         bool is_actor_init = false;
         TypeId actor_owner_type = kInvalidId;
         uint32_t actor_ctx_param_index = kInvalidId;
+        uint32_t exc_ctx_param_index = kInvalidId;
+        TypeId exc_ctx_type = kInvalidId;
 
         // return type (used by builder/dumper)
         TypeId ret_ty = kInvalidId;
@@ -360,6 +362,9 @@ namespace parus::oir {
         std::vector<GlobalDecl> globals;
         std::vector<EscapeHandleHint> escape_hints;
         std::vector<TypeId> actor_types;
+        TypeId recoverable_exc_ctx_type = kInvalidId;
+        uint32_t recoverable_exc_root_global = kInvalidId;
+        std::vector<TypeId> recoverable_exc_payload_types{};
         OptStats opt_stats{};
 
         // ---- add_* helpers (complete types required) ----

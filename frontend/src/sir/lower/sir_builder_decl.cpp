@@ -88,6 +88,19 @@ namespace parus::sir::detail {
             return out;
         }
 
+        bool parse_external_throwing_payload_(std::string_view payload) {
+            size_t pos = 0;
+            while (pos < payload.size()) {
+                size_t next = payload.find('|', pos);
+                if (next == std::string_view::npos) next = payload.size();
+                const std::string_view part = payload.substr(pos, next - pos);
+                if (part == "throwing=1") return true;
+                if (next == payload.size()) break;
+                pos = next + 1;
+            }
+            return false;
+        }
+
         CCallConv lower_ty_callconv_(parus::ty::CCallConv cc) {
             switch (cc) {
                 case parus::ty::CCallConv::kCdecl: return CCallConv::kCdecl;
@@ -885,7 +898,7 @@ namespace parus::sir {
             f.is_const = false;
             f.is_commit = false;
             f.is_recast = false;
-            f.is_throwing = false;
+            f.is_throwing = parse_external_throwing_payload_(ss.external_payload);
             f.entry = k_invalid_block;
             f.origin_stmt = 0xFFFF'FFFFu;
             f.has_any_write = false;

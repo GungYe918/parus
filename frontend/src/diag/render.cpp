@@ -191,10 +191,12 @@ namespace parus::diag {
             case Code::kThrowOnlyInThrowingFn: return "ThrowOnlyInThrowingFn";
             case Code::kTryCatchOnlyInThrowingFn: return "TryCatchOnlyInThrowingFn";
             case Code::kTryExprOperandMustBeThrowingCall: return "TryExprOperandMustBeThrowingCall";
+            case Code::kThrowingCallRequiresTryExpr: return "ThrowingCallRequiresTryExpr";
             case Code::kThrowPayloadTypeNotAllowed: return "ThrowPayloadTypeNotAllowed";
             case Code::kThrowPayloadMustBeRecoverable: return "ThrowPayloadMustBeRecoverable";
             case Code::kTryCatchNeedsAtLeastOneCatch: return "TryCatchNeedsAtLeastOneCatch";
             case Code::kCatchBinderNameExpected: return "CatchBinderNameExpected";
+            case Code::kUntypedCatchBinderRethrowOnly: return "UntypedCatchBinderRethrowOnly";
             case Code::kTryCatchExpectedCatchClause: return "TryCatchExpectedCatchClause";
             case Code::kExceptionLoweringDeferredV0: return "ExceptionLoweringDeferredV0";
             case Code::kTypeFnSignatureExpected: return "TypeFnSignatureExpected";
@@ -565,10 +567,12 @@ namespace parus::diag {
             case Code::kThrowOnlyInThrowingFn: return "throw is only allowed inside throwing ('?') functions";
             case Code::kTryCatchOnlyInThrowingFn: return "try-catch is only allowed inside throwing ('?') functions";
             case Code::kTryExprOperandMustBeThrowingCall: return "try expression operand must be a throwing ('?') function call";
+            case Code::kThrowingCallRequiresTryExpr: return "direct call to throwing function is not allowed here; wrap the call with 'try <call>'";
             case Code::kThrowPayloadTypeNotAllowed: return "throw payload type is not allowed in v0 (expected enum/struct, got {0})";
             case Code::kThrowPayloadMustBeRecoverable: return "throw payload must satisfy Recoverable proto (got {0})";
             case Code::kTryCatchNeedsAtLeastOneCatch: return "try-catch requires at least one catch clause";
             case Code::kCatchBinderNameExpected: return "catch binder name is required (use: catch(name) or catch(name: Type))";
+            case Code::kUntypedCatchBinderRethrowOnly: return "untyped catch binder is an opaque rethrow token and may only be used as 'throw e'";
             case Code::kTryCatchExpectedCatchClause: return "try block must be followed by at least one catch clause";
             case Code::kExceptionLoweringDeferredV0: return "exception lowering is deferred in v0 for function '{0}' (parser+tyck only)";
             case Code::kTypeFnSignatureExpected: return "type-context 'def' must be followed by '('";
@@ -945,10 +949,12 @@ namespace parus::diag {
             case Code::kThrowOnlyInThrowingFn: return "throw는 throwing('?') 함수 내부에서만 사용할 수 있습니다";
             case Code::kTryCatchOnlyInThrowingFn: return "try-catch는 throwing('?') 함수 내부에서만 사용할 수 있습니다";
             case Code::kTryExprOperandMustBeThrowingCall: return "try 식의 피연산자는 throwing('?') 함수 호출이어야 합니다";
+            case Code::kThrowingCallRequiresTryExpr: return "여기서는 throwing 함수 직접 호출이 허용되지 않습니다. 'try <call>'로 감싸야 합니다";
             case Code::kThrowPayloadTypeNotAllowed: return "v0에서 throw payload 타입이 허용되지 않습니다(enum/struct 필요, 현재 {0})";
             case Code::kThrowPayloadMustBeRecoverable: return "throw payload는 Recoverable proto를 만족해야 합니다(현재 {0})";
             case Code::kTryCatchNeedsAtLeastOneCatch: return "try-catch에는 최소 1개의 catch 절이 필요합니다";
             case Code::kCatchBinderNameExpected: return "catch 바인더 이름이 필요합니다 (예: catch(name), catch(name: Type))";
+            case Code::kUntypedCatchBinderRethrowOnly: return "untyped catch 바인더는 opaque rethrow token이며 'throw e' 형태로만 사용할 수 있습니다";
             case Code::kTryCatchExpectedCatchClause: return "try 블록 뒤에는 최소 1개의 catch 절이 와야 합니다";
             case Code::kExceptionLoweringDeferredV0: return "함수 '{0}'의 예외 lowering은 v0에서 아직 미구현입니다(parser+tyck 단계까지만 지원)";
             case Code::kTypeFnSignatureExpected: return "타입 문맥의 'def' 뒤에는 '('이(가) 필요합니다";

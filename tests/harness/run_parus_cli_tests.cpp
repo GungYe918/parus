@@ -7980,6 +7980,369 @@ bool test_escape_array_method_rejects_immutable_receiver() {
     return true;
 }
 
+bool test_exception_non_unwind_runtime_and_rethrow() {
+    const std::string bin = PARUS_BUILD_BIN;
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for exception runtime test\n";
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-exception-runtime";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "main";
+    const std::string src =
+        "proto Recoverable {};\n"
+        "\n"
+        "struct Err: Recoverable {\n"
+        "  code: i32;\n"
+        "};\n"
+        "\n"
+        "def leaf?() -> i32 {\n"
+        "  throw Err { code: 31i32 };\n"
+        "}\n"
+        "\n"
+        "def mid?() -> i32 {\n"
+        "  try {\n"
+        "    return leaf();\n"
+        "  } catch (e) {\n"
+        "    throw e;\n"
+        "  }\n"
+        "}\n"
+        "\n"
+        "def main?() -> i32 {\n"
+        "  try {\n"
+        "    return mid();\n"
+        "  } catch (e: Err) {\n"
+        "    return e.code;\n"
+        "  }\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write exception runtime test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_build, out_build] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    if (rc_build != 0) {
+        std::cerr << "recoverable exception runtime sample should compile/link\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_run, out_run] = run_capture("\"" + exe.string() + "\"; echo EXIT:$?");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_run != 0) {
+        std::cerr << "recoverable exception runtime sample should execute\n" << out_run;
+        return false;
+    }
+    if (!contains(out_run, "EXIT:31")) {
+        std::cerr << "recoverable exception runtime exit mismatch (expected 31)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
+bool test_exception_try_expr_escape_optional_runtime() {
+    const std::string bin = PARUS_BUILD_BIN;
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for exception try-expr owner test\n";
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-exception-try-owner";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "main";
+    const std::string src =
+        "proto Recoverable {};\n"
+        "\n"
+        "struct LoadErr: Recoverable {\n"
+        "  code: i32;\n"
+        "};\n"
+        "\n"
+        "class Worker {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "  def run(self) -> i32 { return self.value; }\n"
+        "};\n"
+        "\n"
+        "def load?(ok: bool) -> ~Worker {\n"
+        "  if (ok) {\n"
+        "    set w = Worker(9i32);\n"
+        "    return ~w;\n"
+        "  }\n"
+        "  throw LoadErr { code: 1i32 };\n"
+        "}\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set mut first = try load(true);\n"
+        "  let w: ~Worker = first else {\n"
+        "    return 90i32;\n"
+        "  };\n"
+        "  set mut second = try load(false);\n"
+        "  let lost: ~Worker = second else {\n"
+        "    return w.run() + 1i32;\n"
+        "  };\n"
+        "  return lost.run();\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write exception try-expr owner test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_build, out_build] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    if (rc_build != 0) {
+        std::cerr << "try expr over throwing ~ return should compile/link\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_run, out_run] = run_capture("\"" + exe.string() + "\"; echo EXIT:$?");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_run != 0) {
+        std::cerr << "try expr over throwing ~ return should execute\n" << out_run;
+        return false;
+    }
+    if (!contains(out_run, "EXIT:10")) {
+        std::cerr << "try expr over throwing ~ return exit mismatch (expected 10)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
+bool test_exception_throw_owner_handle_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-exception-throw-owner-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "proto Recoverable {};\n"
+        "class Worker { init() = default; };\n"
+        "def main?() -> i32 {\n"
+        "  set w = Worker();\n"
+        "  throw ~w;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write exception throw-owner rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture("\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc == 0) {
+        std::cerr << "throw owner-handle payload must fail\n" << out;
+        return false;
+    }
+    if (!contains(out, "ThrowPayloadTypeNotAllowed") || !contains(out, "owner-handle model")) {
+        std::cerr << "throw owner-handle payload rejection must explain recoverable/value-only boundary\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_exception_throw_borrow_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-exception-throw-borrow-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "proto Recoverable {};\n"
+        "def main?() -> i32 {\n"
+        "  set x = 1i32;\n"
+        "  throw &x;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write exception throw-borrow rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture("\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc == 0) {
+        std::cerr << "throw borrow payload must fail\n" << out;
+        return false;
+    }
+    if (!contains(out, "ThrowPayloadTypeNotAllowed") || !contains(out, "value-only non-unwind channel")) {
+        std::cerr << "throw borrow payload rejection must explain recoverable value-only channel\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_exception_typed_catch_owner_handle_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-exception-catch-owner-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "proto Recoverable {};\n"
+        "struct Err: Recoverable { code: i32; };\n"
+        "class Worker { init() = default; };\n"
+        "def leaf?() -> i32 {\n"
+        "  throw Err { code: 1i32 };\n"
+        "}\n"
+        "def main?() -> i32 {\n"
+        "  try {\n"
+        "    return leaf();\n"
+        "  } catch (e: ~Worker) {\n"
+        "    return 0i32;\n"
+        "  }\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write exception typed-catch owner rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture("\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc == 0) {
+        std::cerr << "typed catch owner-handle binder must fail\n" << out;
+        return false;
+    }
+    if (!contains(out, "ThrowPayloadTypeNotAllowed") || !contains(out, "typed catch binder")) {
+        std::cerr << "typed catch owner-handle rejection must explain recoverable payload boundary\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_exception_untyped_catch_binder_misuse_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-exception-untyped-catch-misuse";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "proto Recoverable {};\n"
+        "struct Err: Recoverable { code: i32; };\n"
+        "def leaf?() -> i32 {\n"
+        "  throw Err { code: 1i32 };\n"
+        "}\n"
+        "def main?() -> i32 {\n"
+        "  try {\n"
+        "    return leaf();\n"
+        "  } catch (e) {\n"
+        "    let x: i64 = e;\n"
+        "    return x as i32;\n"
+        "  }\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write exception untyped-catch misuse test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture("\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc == 0) {
+        std::cerr << "untyped catch binder misuse must fail\n" << out;
+        return false;
+    }
+    if (!contains(out, "UntypedCatchBinderRethrowOnly") || !contains(out, "throw e")) {
+        std::cerr << "untyped catch binder misuse must explain rethrow-only rule\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_exception_throwing_call_requires_try_expr() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-exception-try-expr-required";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "proto Recoverable {};\n"
+        "struct Err: Recoverable { code: i32; };\n"
+        "def leaf?() -> i32 {\n"
+        "  throw Err { code: 1i32 };\n"
+        "}\n"
+        "def main() -> i32 {\n"
+        "  return leaf();\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write exception try-expr-required test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture("\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc == 0) {
+        std::cerr << "direct ? -> non-? call must fail\n" << out;
+        return false;
+    }
+    if (!contains(out, "ThrowingCallRequiresTryExpr") || !contains(out, "try <call>")) {
+        std::cerr << "direct throwing call rejection must require try expression\n" << out;
+        return false;
+    }
+    return true;
+}
+
 bool test_escape_unsized_owner_array_rejected() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -9231,6 +9594,13 @@ int main() {
     const bool ok113 = test_escape_array_method_replace_rejected_on_optional_owner_array();
     const bool ok114 = test_escape_array_method_put_rejected_on_non_owner_array();
     const bool ok115 = test_escape_array_method_rejects_immutable_receiver();
+    const bool ok116 = test_exception_non_unwind_runtime_and_rethrow();
+    const bool ok117 = test_exception_try_expr_escape_optional_runtime();
+    const bool ok118 = test_exception_throw_owner_handle_rejected();
+    const bool ok119 = test_exception_throw_borrow_rejected();
+    const bool ok120 = test_exception_typed_catch_owner_handle_rejected();
+    const bool ok121 = test_exception_untyped_catch_binder_misuse_rejected();
+    const bool ok122 = test_exception_throwing_call_requires_try_expr();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
@@ -9241,7 +9611,8 @@ int main() {
         !ok72 || !ok73 || !ok74 || !ok75 || !ok76 || !ok77 || !ok78 || !ok79 || !ok80 || !ok81 || !ok82 ||
         !ok83 || !ok84 || !ok85 || !ok86 || !ok87 || !ok88 || !ok89 || !ok90 || !ok91 || !ok92 || !ok93 || !ok94 ||
         !ok95 || !ok96 || !ok97 || !ok98 || !ok99 || !ok100 || !ok101 || !ok102 || !ok103 || !ok104 || !ok105 ||
-        !ok106 || !ok107 || !ok108 || !ok109 || !ok110 || !ok111 || !ok112 || !ok113 || !ok114 || !ok115) {
+        !ok106 || !ok107 || !ok108 || !ok109 || !ok110 || !ok111 || !ok112 || !ok113 || !ok114 || !ok115 ||
+        !ok116 || !ok117 || !ok118 || !ok119 || !ok120 || !ok121 || !ok122) {
         return 1;
     }
 

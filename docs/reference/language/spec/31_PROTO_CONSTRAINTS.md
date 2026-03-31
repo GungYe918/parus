@@ -244,6 +244,7 @@ proto Unrecoverable {};
 규칙:
 
 1. `throw` payload 타입은 `Recoverable`을 만족해야 한다.
-2. panic/foreign fault로 분류되는 payload 타입은 `Unrecoverable`을 만족해야 한다.
+2. `Unrecoverable`은 panic/foreign fault 같은 fatal 채널 분류용 마커이며, ordinary `try...catch`의 포획 대상이 아니다.
 3. 하나의 타입에 `Recoverable`와 `Unrecoverable`를 동시에 부착하는 것은 금지한다.
 4. 권장 구현: 에러 payload는 `enum`/`struct` 값 타입으로 선언한다.
+5. owner-handle payload(`~T`)는 recoverable payload로 허용되지 않는다.

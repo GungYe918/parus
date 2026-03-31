@@ -871,7 +871,7 @@ namespace parus::backend::aot {
                         const auto& entry = m_.blocks[fn_.entry];
                         for (size_t i = 0; i < entry.params.size(); ++i) {
                             if (i) os << ", ";
-                            os << abi_value_ty_(entry.params[i], fn_.abi);
+                            os << abi_param_ty_(fn_, i, entry.params[i]);
                         }
                     }
                     if (returns_escape_via_slot) {
@@ -902,7 +902,7 @@ namespace parus::backend::aot {
                     const auto& entry = m_.blocks[fn_.entry];
                     for (size_t i = 0; i < entry.params.size(); ++i) {
                         if (i) os << ", ";
-                        os << abi_value_ty_(entry.params[i], fn_.abi) << " %arg" << i;
+                        os << abi_param_ty_(fn_, i, entry.params[i]) << " %arg" << i;
                     }
                 }
                 if (returns_escape_via_slot) {
@@ -967,6 +967,7 @@ namespace parus::backend::aot {
                 parus::ty::TypeId ret_type_id = parus::ty::kInvalidType;
                 parus::ty::TypeId ret_escape_elem_ty = parus::ty::kInvalidType;
                 std::vector<std::string> param_tys{};
+                std::vector<bool> param_is_exc_ctx{};
                 parus::oir::FunctionAbi abi = parus::oir::FunctionAbi::Parus;
                 parus::oir::CCallConv c_callconv = parus::oir::CCallConv::Default;
                 bool is_variadic = false;
@@ -1067,6 +1068,11 @@ namespace parus::backend::aot {
                 return value_types_[v];
             }
 
+            bool is_exc_ctx_param_(const parus::oir::Function& fn, size_t param_index) const {
+                return fn.exc_ctx_param_index != parus::oir::kInvalidId &&
+                       static_cast<size_t>(fn.exc_ctx_param_index) == param_index;
+            }
+
             /// @brief 값의 함수 ABI 관점 LLVM 타입을 계산한다.
             std::string abi_value_ty_(parus::oir::ValueId v, parus::oir::FunctionAbi abi) const {
                 if (abi != parus::oir::FunctionAbi::C) {
@@ -1078,6 +1084,17 @@ namespace parus::backend::aot {
                 if (ty == "void") ty = "i8";
                 (void)require_storage_shape_(tid, "function ABI value");
                 return ty;
+            }
+
+            std::string abi_param_ty_(
+                const parus::oir::Function& fn,
+                size_t param_index,
+                parus::oir::ValueId v
+            ) const {
+                if (is_exc_ctx_param_(fn, param_index)) {
+                    return "ptr";
+                }
+                return abi_value_ty_(v, fn.abi);
             }
 
             /// @brief ValueId의 타입 ID를 반환한다.
@@ -1381,12 +1398,15 @@ namespace parus::backend::aot {
                 if (target.entry != kInvalidId && static_cast<size_t>(target.entry) < m_.blocks.size()) {
                     const auto& entry = m_.blocks[target.entry];
                     info.param_tys.reserve(entry.params.size());
-                    for (auto p : entry.params) {
-                        info.param_tys.push_back(abi_value_ty_(p, target.abi));
+                    info.param_is_exc_ctx.reserve(entry.params.size());
+                    for (size_t i = 0; i < entry.params.size(); ++i) {
+                        info.param_tys.push_back(abi_param_ty_(target, i, entry.params[i]));
+                        info.param_is_exc_ctx.push_back(is_exc_ctx_param_(target, i));
                     }
                 }
                 if (info.returns_escape_via_slot) {
                     info.param_tys.push_back("ptr");
+                    info.param_is_exc_ctx.push_back(false);
                 }
 
                 return info;
@@ -1425,6 +1445,28 @@ namespace parus::backend::aot {
                     "' is not address-backed and cannot be reinterpreted as ptr"
                 );
                 return "null";
+            }
+
+            const parus::oir::Inst* value_def_inst_(parus::oir::ValueId v) const {
+                if (v == parus::oir::kInvalidId || static_cast<size_t>(v) >= m_.values.size()) return nullptr;
+                const auto& vv = m_.values[v];
+                if (vv.def_b != parus::oir::kInvalidId) return nullptr;
+                if (vv.def_a == parus::oir::kInvalidId || static_cast<size_t>(vv.def_a) >= m_.insts.size()) {
+                    return nullptr;
+                }
+                return &m_.insts[vv.def_a];
+            }
+
+            std::string exc_ctx_arg_ptr_ref_(std::ostringstream& os, parus::oir::ValueId v) {
+                if (auto it = address_ref_by_value_.find(v); it != address_ref_by_value_.end()) {
+                    return it->second;
+                }
+                if (const auto* di = value_def_inst_(v);
+                    di != nullptr && std::holds_alternative<parus::oir::InstLoad>(di->data)) {
+                    const auto& ld = std::get<parus::oir::InstLoad>(di->data);
+                    return slot_ptr_ref_(os, ld.slot);
+                }
+                return slot_ptr_ref_(os, v);
             }
 
             /// @brief aggregate 타입의 zero-init slot을 생성하고 ptr SSA를 반환한다.
@@ -1682,6 +1724,19 @@ namespace parus::backend::aot {
                             ? loaded
                             : coerce_ref_(os, loaded, pointee_ty, want);
                     }
+                    const bool is_plain_raw_ptr_value =
+                        st.kind == parus::ty::Kind::kPtr ||
+                        (st.kind == parus::ty::Kind::kBuiltin &&
+                         st.builtin == parus::ty::Builtin::kNull);
+                    if (want == "ptr" &&
+                        is_plain_raw_ptr_value &&
+                        cur == "ptr") {
+                        if (auto it = address_ref_by_value_.find(src); it != address_ref_by_value_.end()) {
+                            const std::string loaded = next_tmp_();
+                            os << "  " << loaded << " = load ptr, ptr " << it->second << "\n";
+                            return loaded;
+                        }
+                    }
                 }
                 if (want == "{ ptr, i64 }" && cur == "ptr") {
                     if (auto info = const_text_info_of_value_(src); info.has_value()) {
@@ -1703,6 +1758,10 @@ namespace parus::backend::aot {
                     auto it = address_ref_by_value_.find(src);
                     if (it != address_ref_by_value_.end()) return it->second;
                 }
+                if (want == "ptr") {
+                    auto it = address_ref_by_value_.find(src);
+                    if (it != address_ref_by_value_.end()) return it->second;
+                }
                 const std::string ref = vref_(src);
                 return coerce_ref_(os, ref, cur, want);
             }
@@ -1718,8 +1777,13 @@ namespace parus::backend::aot {
                     for (size_t i = 0; i < block.params.size(); ++i) {
                         const auto p = block.params[i];
                         const std::string pty = value_ty_(p);
-                        const std::string aty = abi_value_ty_(p, fn_.abi);
+                        const std::string aty = abi_param_ty_(fn_, i, p);
                         const std::string arg = "%arg" + std::to_string(i);
+
+                        if (is_exc_ctx_param_(fn_, i)) {
+                            address_ref_by_value_[p] = arg;
+                            continue;
+                        }
 
                         if (pty == aty) {
                             os << "  " << vref_(p) << " = " << copy_expr_(pty, arg) << "\n";
@@ -2668,7 +2732,9 @@ namespace parus::backend::aot {
                                     if (ai < direct->param_tys.size()) {
                                         want = direct->param_tys[ai];
                                         want_parus_indirect_aggregate =
-                                            direct->abi != parus::oir::FunctionAbi::C && want == "ptr";
+                                            direct->abi != parus::oir::FunctionAbi::C &&
+                                            want == "ptr" &&
+                                            logical_indirect_aggregate_ty_(x.args[ai]).has_value();
                                     } else if (direct->is_variadic &&
                                                ai >= static_cast<size_t>(direct->fixed_param_count)) {
                                         want = promote_c_variadic_abi_ty(src_ty);
@@ -2682,6 +2748,12 @@ namespace parus::backend::aot {
                                     }
                                 }
                                 arg_tys.push_back(want);
+                                if (direct.has_value() &&
+                                    ai < direct->param_is_exc_ctx.size() &&
+                                    direct->param_is_exc_ctx[ai]) {
+                                    arg_vals.push_back(exc_ctx_arg_ptr_ref_(os, x.args[ai]));
+                                    continue;
+                                }
                                 if (want_parus_indirect_aggregate) {
                                     if (auto addr = ensure_indirect_aggregate_addr_(os, x.args[ai]);
                                         addr.has_value()) {
@@ -3567,6 +3639,7 @@ namespace parus::backend::aot {
         struct MainEntryCandidate {
             std::string symbol{};
             std::string ret_ty{};
+            bool needs_exc_ctx = false;
         };
         std::optional<MainEntryCandidate> main_entry_candidate{};
 
@@ -3591,13 +3664,21 @@ namespace parus::backend::aot {
                 bool is_zero_arity = false;
                 if (def.entry != parus::oir::kInvalidId &&
                     static_cast<size_t>(def.entry) < oir.blocks.size()) {
-                    is_zero_arity = oir.blocks[def.entry].params.empty();
+                    const auto& entry = oir.blocks[def.entry];
+                    size_t hidden_count = 0;
+                    if (def.actor_ctx_param_index != parus::oir::kInvalidId) hidden_count += 1u;
+                    if (def.exc_ctx_param_index != parus::oir::kInvalidId) hidden_count += 1u;
+                    is_zero_arity = entry.params.size() == hidden_count;
                 }
                 const std::string ret_ty =
                     map_type_(types, def.ret_ty, &named_layouts, &actor_types, &scalar_enum_types);
                 if (is_zero_arity && (ret_ty == "i32" || ret_ty == "void")) {
                     if (!main_entry_candidate.has_value()) {
-                        main_entry_candidate = MainEntryCandidate{fn_sym, ret_ty};
+                        main_entry_candidate = MainEntryCandidate{
+                            fn_sym,
+                            ret_ty,
+                            def.exc_ctx_param_index != parus::oir::kInvalidId
+                        };
                     } else if (main_entry_candidate->symbol != fn_sym) {
                         has_ambiguous_main_entry = true;
                     }
@@ -3667,11 +3748,30 @@ namespace parus::backend::aot {
             } else if (has_local_module_init) {
                 os << "  call void @" << local_module_init_sym << "()\n";
             }
+            std::string main_call_args{};
+            if (main_entry_candidate->needs_exc_ctx) {
+                const auto root_gid = oir.recoverable_exc_root_global;
+                if (root_gid != parus::oir::kInvalidId &&
+                    static_cast<size_t>(root_gid) < oir.globals.size() &&
+                    oir.recoverable_exc_ctx_type != parus::ty::kInvalidType) {
+                    const std::string exc_root_sym = sanitize_symbol_(oir.globals[root_gid].name);
+                    const std::string exc_ctx_ty =
+                        map_type_(types, oir.recoverable_exc_ctx_type,
+                                  &named_layouts, &actor_types, &scalar_enum_types);
+                    os << "  store " << exc_ctx_ty << " zeroinitializer, ptr @" << exc_root_sym << "\n";
+                    main_call_args = "ptr @" + exc_root_sym;
+                } else {
+                    out.messages.push_back(CompileMessage{
+                        true,
+                        "main entry wrapper requires recoverable exception root context for throwing entry."
+                    });
+                }
+            }
             if (main_entry_candidate->ret_ty == "i32") {
-                os << "  %main_ret = call i32 @" << main_entry_candidate->symbol << "()\n";
+                os << "  %main_ret = call i32 @" << main_entry_candidate->symbol << "(" << main_call_args << ")\n";
                 os << "  ret i32 %main_ret\n";
             } else {
-                os << "  call void @" << main_entry_candidate->symbol << "()\n";
+                os << "  call void @" << main_entry_candidate->symbol << "(" << main_call_args << ")\n";
                 os << "  ret i32 0\n";
             }
             os << "}\n\n";

@@ -962,6 +962,26 @@ namespace parus::tyck {
                     if (eid < expr_resolved_symbol_cache_.size()) {
                         expr_resolved_symbol_cache_[eid] = *id;
                     }
+                    if (untyped_catch_binder_symbols_.find(*id) != untyped_catch_binder_symbols_.end() &&
+                        !allow_untyped_catch_binder_rethrow_use_) {
+                        result_.ok = false;
+                        if (diag_bag_) {
+                            diag::Diagnostic d(
+                                diag::Severity::kError,
+                                diag::Code::kUntypedCatchBinderRethrowOnly,
+                                e.span);
+                            d.add_label(e.span, "this catch binder is only valid as a direct rethrow token");
+                            d.add_note("untyped catch does not expose the recoverable payload as a regular value");
+                            d.add_help(std::string("use `throw ") + std::string(e.text) +
+                                       "` to rethrow the active recoverable payload");
+                            d.add_help(std::string("use a typed catch binder like `catch(") +
+                                       std::string(e.text) + ": MyErr)` to inspect a payload");
+                            diag_bag_->add(std::move(d));
+                        }
+                        err_(e.span, "untyped catch binder may only be used as direct rethrow token");
+                        t = types_.error();
+                        break;
+                    }
                     if (!suppress_ownership_read_) {
                         (void)ensure_symbol_readable_(*id, e.span);
                     }

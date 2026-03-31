@@ -920,12 +920,33 @@ namespace {
         ok &= require_(lowered.ok, "exception payload/rethrow LLVM text lowering must succeed");
         if (!ok) return false;
 
-        ok &= require_(lowered.llvm_ir.find("@__parus_exc_active") != std::string::npos,
-                       "LLVM-IR must contain __parus_exc_active global");
-        ok &= require_(lowered.llvm_ir.find("@__parus_exc_type") != std::string::npos,
-                       "LLVM-IR must contain __parus_exc_type global");
-        ok &= require_(lowered.llvm_ir.find("@__parus_exc_payload$") != std::string::npos,
-                       "LLVM-IR must contain typed exception payload global");
+        bool has_func_with_exc_ctx = false;
+        bool has_func_without_exc_ctx = false;
+        for (const auto& fn : p->oir.mod.funcs) {
+            if (fn.is_extern) continue;
+            if (fn.exc_ctx_param_index != parus::oir::kInvalidId) {
+                has_func_with_exc_ctx = true;
+            }
+            if (fn.exc_ctx_param_index == parus::oir::kInvalidId) {
+                has_func_without_exc_ctx = true;
+            }
+        }
+        ok &= require_(has_func_with_exc_ctx,
+                       "throwing Parus functions must receive hidden exc_ctx parameters in OIR");
+        ok &= require_(has_func_without_exc_ctx,
+                       "non-throwing Parus functions must not receive hidden exc_ctx parameters");
+        ok &= require_(p->oir.mod.recoverable_exc_ctx_type != parus::oir::kInvalidId,
+                       "OIR module must synthesize a recoverable exception context type");
+        ok &= require_(p->oir.mod.recoverable_exc_root_global != parus::oir::kInvalidId,
+                       "OIR module must synthesize a recoverable root exception context");
+        ok &= require_(lowered.llvm_ir.find("@__parus_exc_root") != std::string::npos,
+                       "LLVM-IR must contain __parus_exc_root TLS root");
+        ok &= require_(lowered.llvm_ir.find("@__parus_exc_active") == std::string::npos,
+                       "LLVM-IR must not contain legacy __parus_exc_active global");
+        ok &= require_(lowered.llvm_ir.find("@__parus_exc_type") == std::string::npos,
+                       "LLVM-IR must not contain legacy __parus_exc_type global");
+        ok &= require_(lowered.llvm_ir.find("@__parus_exc_payload$") == std::string::npos,
+                       "LLVM-IR must not contain legacy typed payload globals");
         const auto has_line_with_tokens = [&](std::string_view a, std::string_view b) {
             size_t pos = 0;
             while (pos < lowered.llvm_ir.size()) {
@@ -943,15 +964,18 @@ namespace {
             }
             return false;
         };
-        ok &= require_(has_line_with_tokens("store ", "@__parus_exc_payload$"),
-                       "throw path must store payload into typed exception payload global");
-        const bool has_direct_payload_load = has_line_with_tokens("load ", "@__parus_exc_payload$");
-        const bool has_payload_select = has_line_with_tokens("select ", "@__parus_exc_payload$");
-        ok &= require_(has_direct_payload_load || has_payload_select,
-                       "typed catch path must load payload from typed exception payload global");
-        // untyped rethrow must propagate dynamic type-id (not constant-only path).
-        ok &= require_(lowered.llvm_ir.find("load i64, ptr @__parus_exc_type") != std::string::npos,
-                       "rethrow path must read existing exception type-id dynamically");
+        ok &= require_(has_line_with_tokens("@__parus_exc_root", "thread_local"),
+                       "exception root context must lower as thread_local state");
+        ok &= require_(lowered.llvm_ir.find("load i64, ptr %") != std::string::npos,
+                       "rethrow path must read existing exception type-id dynamically through exc_ctx");
+        ok &= require_(lowered.llvm_ir.find(" invoke ") == std::string::npos,
+                       "ordinary recoverable exceptions must not lower with invoke");
+        ok &= require_(lowered.llvm_ir.find("landingpad") == std::string::npos,
+                       "ordinary recoverable exceptions must not lower with landingpad");
+        ok &= require_(lowered.llvm_ir.find(" resume ") == std::string::npos,
+                       "ordinary recoverable exceptions must not lower with resume");
+        ok &= require_(lowered.llvm_ir.find("personality") == std::string::npos,
+                       "ordinary recoverable exceptions must not request a personality routine");
         if (!ok) return false;
         return emit_object_for_test_case_(lowered.llvm_ir, "exception_payload_rethrow_patterns");
     }

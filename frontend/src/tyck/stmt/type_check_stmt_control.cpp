@@ -967,30 +967,57 @@ namespace parus::tyck {
             return;
         }
 
-        ty::TypeId payload_t = check_expr_(s.expr, Slot::kValue);
-        (void)ensure_generic_field_instance_from_type_(payload_t, s.span);
-        (void)ensure_generic_enum_instance_from_type_(payload_t, s.span);
-
         // catch(e)에서 바인딩된 untyped payload는 opaque rethrow 토큰으로 허용한다.
         // v0에서는 `throw e` 패턴만 보장하고, 구조 분해/필드 접근은 지원하지 않는다.
         bool is_untyped_catch_rethrow = false;
         const auto& payload_expr = ast_.expr(s.expr);
+        std::optional<uint32_t> payload_sym{};
         if (payload_expr.kind == ast::ExprKind::kIdent) {
-            if (auto sid = lookup_symbol_(payload_expr.text)) {
-                is_untyped_catch_rethrow = (untyped_catch_binder_symbols_.find(*sid) !=
+            payload_sym = lookup_symbol_(payload_expr.text);
+            if (payload_sym.has_value()) {
+                is_untyped_catch_rethrow = (untyped_catch_binder_symbols_.find(*payload_sym) !=
                                             untyped_catch_binder_symbols_.end());
             }
         }
+
+        const bool old_allow_untyped_rethrow = allow_untyped_catch_binder_rethrow_use_;
+        allow_untyped_catch_binder_rethrow_use_ = is_untyped_catch_rethrow;
+        ty::TypeId payload_t = check_expr_(s.expr, Slot::kValue);
+        allow_untyped_catch_binder_rethrow_use_ = old_allow_untyped_rethrow;
+        (void)ensure_generic_field_instance_from_type_(payload_t, s.span);
+        (void)ensure_generic_enum_instance_from_type_(payload_t, s.span);
+
         if (is_untyped_catch_rethrow) {
             fn_ctx_.has_exception_construct = true;
             return;
         }
 
+        auto emit_payload_value_only_diag = [&](Span sp, ty::TypeId actual_t, std::string_view headline) {
+            result_.ok = false;
+            if (!diag_bag_) return;
+            diag::Diagnostic d(diag::Severity::kError, diag::Code::kThrowPayloadTypeNotAllowed, sp);
+            d.add_arg(types_.to_string(actual_t));
+            d.add_label(sp, headline);
+            d.add_note("recoverable payloads travel in a value-only non-unwind channel");
+            d.add_note("the owner-handle model stays separate from recoverable exception payloads");
+            d.add_help("throw a small Recoverable enum/struct value instead");
+            d.add_help("keep owner handles and borrows in locals/state transitions, not in exception payloads");
+            diag_bag_->add(std::move(d));
+        };
+
         const bool is_struct_payload = (field_abi_meta_by_type_.find(payload_t) != field_abi_meta_by_type_.end());
         const bool is_enum_payload = (enum_abi_meta_by_type_.find(payload_t) != enum_abi_meta_by_type_.end());
         if (!is_struct_payload && !is_enum_payload) {
-            diag_(diag::Code::kThrowPayloadTypeNotAllowed, s.span, types_.to_string(payload_t));
+            emit_payload_value_only_diag(s.span, payload_t,
+                                         "recoverable payload must be an enum/struct value");
             err_(s.span, "throw payload must be enum/struct value in v0");
+            fn_ctx_.has_exception_construct = true;
+            return;
+        }
+        if (type_contains_escape_(payload_t)) {
+            emit_payload_value_only_diag(s.span, payload_t,
+                                         "owner-handle values are not allowed in recoverable payloads");
+            err_(s.span, "throw payload must not contain owner-handle values");
             fn_ctx_.has_exception_construct = true;
             return;
         }
@@ -1126,11 +1153,29 @@ namespace parus::tyck {
                 bind_t = cc.bind_type;
                 (void)ensure_generic_field_instance_from_type_(bind_t, cc.span);
                 (void)ensure_generic_enum_instance_from_type_(bind_t, cc.span);
+                auto emit_payload_value_only_diag = [&](Span sp, ty::TypeId actual_t, std::string_view headline) {
+                    result_.ok = false;
+                    if (!diag_bag_) return;
+                    diag::Diagnostic d(diag::Severity::kError, diag::Code::kThrowPayloadTypeNotAllowed, sp);
+                    d.add_arg(types_.to_string(actual_t));
+                    d.add_label(sp, headline);
+                    d.add_note("typed catch binders follow the same recoverable payload channel as throw");
+                    d.add_note("the owner-handle model stays outside recoverable exception payloads");
+                    d.add_help("bind a Recoverable enum/struct value here");
+                    d.add_help("keep owner handles in local/state-transition paths instead of exception payloads");
+                    diag_bag_->add(std::move(d));
+                };
                 const bool is_struct_payload = (field_abi_meta_by_type_.find(bind_t) != field_abi_meta_by_type_.end());
                 const bool is_enum_payload = (enum_abi_meta_by_type_.find(bind_t) != enum_abi_meta_by_type_.end());
                 if (!is_struct_payload && !is_enum_payload) {
-                    diag_(diag::Code::kThrowPayloadTypeNotAllowed, cc.span, types_.to_string(bind_t));
+                    emit_payload_value_only_diag(cc.span, bind_t,
+                                                 "typed catch binder must name a Recoverable enum/struct value");
                     err_(cc.span, "typed catch binder must be enum/struct value in v0");
+                    bind_t = types_.error();
+                } else if (type_contains_escape_(bind_t)) {
+                    emit_payload_value_only_diag(cc.span, bind_t,
+                                                 "typed catch binder must not contain owner-handle values");
+                    err_(cc.span, "typed catch binder must not contain owner-handle values");
                     bind_t = types_.error();
                 } else if (!recoverable_sid.has_value() ||
                            !satisfies_recoverable(bind_t, *recoverable_sid, cc.span)) {

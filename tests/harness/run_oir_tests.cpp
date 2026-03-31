@@ -1853,17 +1853,40 @@ namespace {
         ok &= require_(verrs.empty(), "OIR verify must pass for exception payload source");
         if (!ok) return false;
 
-        bool has_exc_active_global = false;
-        bool has_exc_type_global = false;
-        bool has_exc_payload_global = false;
+        bool has_exc_root_global = false;
+        bool exc_root_tls = false;
+        bool has_legacy_exc_active_global = false;
+        bool has_legacy_exc_type_global = false;
+        bool has_legacy_exc_payload_global = false;
         for (const auto& g : oir.mod.globals) {
-            if (g.name == "__parus_exc_active") has_exc_active_global = true;
-            if (g.name == "__parus_exc_type") has_exc_type_global = true;
-            if (g.name.find("__parus_exc_payload$") == 0) has_exc_payload_global = true;
+            if (g.name == "__parus_exc_root") {
+                has_exc_root_global = true;
+                exc_root_tls = (g.c_tls_kind != parus::oir::CThreadLocalKind::None);
+            }
+            if (g.name == "__parus_exc_active") {
+                has_legacy_exc_active_global = true;
+            }
+            if (g.name == "__parus_exc_type") {
+                has_legacy_exc_type_global = true;
+            }
+            if (g.name.find("__parus_exc_payload$") == 0) {
+                has_legacy_exc_payload_global = true;
+            }
         }
-        ok &= require_(has_exc_active_global, "exception lowering must synthesize __parus_exc_active global");
-        ok &= require_(has_exc_type_global, "exception lowering must synthesize __parus_exc_type global");
-        ok &= require_(has_exc_payload_global, "exception lowering must synthesize typed payload global");
+        ok &= require_(oir.mod.recoverable_exc_ctx_type != parus::oir::kInvalidId,
+                       "exception lowering must synthesize a recoverable exception context type");
+        ok &= require_(oir.mod.recoverable_exc_root_global != parus::oir::kInvalidId,
+                       "exception lowering must synthesize a recoverable root exception context");
+        ok &= require_(!oir.mod.recoverable_exc_payload_types.empty(),
+                       "exception lowering must track at least one recoverable payload type");
+        ok &= require_(has_exc_root_global, "exception lowering must synthesize __parus_exc_root global");
+        ok &= require_(exc_root_tls, "exception root context must lower as TLS-backed state");
+        ok &= require_(!has_legacy_exc_active_global,
+                       "exception lowering must not synthesize legacy __parus_exc_active global");
+        ok &= require_(!has_legacy_exc_type_global,
+                       "exception lowering must not synthesize legacy __parus_exc_type global");
+        ok &= require_(!has_legacy_exc_payload_global,
+                       "exception lowering must not synthesize legacy typed payload globals");
         if (!ok) return false;
 
         auto value_def_inst = [&](parus::oir::ValueId v) -> const parus::oir::Inst* {
@@ -1872,40 +1895,115 @@ namespace {
             if (ida == parus::oir::kInvalidId || ida >= oir.mod.insts.size()) return nullptr;
             return &oir.mod.insts[ida];
         };
-        auto slot_is_global_named = [&](parus::oir::ValueId slot, std::string_view name_prefix) -> bool {
+        auto slot_field_name = [&](parus::oir::ValueId slot) -> std::string_view {
             const auto* di = value_def_inst(slot);
-            if (di == nullptr) return false;
-            if (!std::holds_alternative<parus::oir::InstGlobalRef>(di->data)) return false;
-            const auto& gr = std::get<parus::oir::InstGlobalRef>(di->data);
-            return gr.name.find(name_prefix) == 0;
+            if (di == nullptr) return {};
+            if (!std::holds_alternative<parus::oir::InstField>(di->data)) return {};
+            const auto& fd = std::get<parus::oir::InstField>(di->data);
+            return fd.field;
+        };
+        auto slot_field_has_prefix = [&](parus::oir::ValueId slot, std::string_view name_prefix) -> bool {
+            const auto field = slot_field_name(slot);
+            return !field.empty() && field.find(name_prefix) == 0;
         };
 
         bool has_payload_store = false;
         bool has_payload_load = false;
-        bool has_dynamic_exc_type_store = false;
+        bool has_dynamic_exc_type_load = false;
 
         for (const auto& inst : oir.mod.insts) {
             if (const auto* st = std::get_if<parus::oir::InstStore>(&inst.data)) {
-                if (slot_is_global_named(st->slot, "__parus_exc_payload$")) {
+                if (slot_field_has_prefix(st->slot, "__payload$")) {
                     has_payload_store = true;
                 }
-                if (slot_is_global_named(st->slot, "__parus_exc_type")) {
-                    const auto* vdef = value_def_inst(st->value);
-                    if (vdef != nullptr && !std::holds_alternative<parus::oir::InstConstInt>(vdef->data)) {
-                        has_dynamic_exc_type_store = true;
-                    }
-                }
             } else if (const auto* ld = std::get_if<parus::oir::InstLoad>(&inst.data)) {
-                if (slot_is_global_named(ld->slot, "__parus_exc_payload$")) {
+                if (slot_field_has_prefix(ld->slot, "__payload$")) {
                     has_payload_load = true;
+                }
+                if (slot_field_name(ld->slot) == "__type") {
+                    has_dynamic_exc_type_load = true;
                 }
             }
         }
 
-        ok &= require_(has_payload_store, "throw payload must be stored to typed exception payload slot");
-        ok &= require_(has_payload_load, "typed catch must load payload from typed exception payload slot");
-        ok &= require_(has_dynamic_exc_type_store,
-                       "untyped catch rethrow must store dynamic exception type-id (non-constant path)");
+        ok &= require_(has_payload_store, "throw payload must be stored in the recoverable exception context");
+        ok &= require_(has_payload_load, "typed catch must load payload from the recoverable exception context");
+        ok &= require_(has_dynamic_exc_type_load,
+                       "untyped catch rethrow must read the dynamic exception type-id from exception context");
+        return ok;
+    }
+
+    static bool test_try_expr_exception_payload_cleanup_lowering_ok() {
+        const std::string src = R"(
+            proto Recoverable {};
+
+            class Token {
+                value: i32;
+
+                init(v: i32) {
+                    self.value = v;
+                }
+
+                deinit() {}
+            }
+
+            struct Err: Recoverable {
+                token: Token;
+            }
+
+            def leaf?() -> i32 {
+                throw Err { token: Token(5i32) };
+            }
+
+            def main() -> i32 {
+                set v = try leaf();
+                return v ?? -1i32;
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "try-expr payload cleanup source must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "try-expr payload cleanup source must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "try-expr payload cleanup source must pass SIR capability");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for try-expr payload cleanup source");
+        if (!ok) return false;
+
+        parus::oir::run_passes(oir.mod);
+        const auto verrs = parus::oir::verify(oir.mod);
+        ok &= require_(verrs.empty(), "OIR verify must pass for try-expr payload cleanup source");
+        if (!ok) return false;
+
+        auto value_def_inst = [&](parus::oir::ValueId v) -> const parus::oir::Inst* {
+            if (v == parus::oir::kInvalidId || v >= oir.mod.values.size()) return nullptr;
+            const auto ida = oir.mod.values[v].def_a;
+            if (ida == parus::oir::kInvalidId || ida >= oir.mod.insts.size()) return nullptr;
+            return &oir.mod.insts[ida];
+        };
+        auto slot_field_has_prefix = [&](parus::oir::ValueId slot, std::string_view name_prefix) -> bool {
+            const auto* di = value_def_inst(slot);
+            if (di == nullptr) return false;
+            if (!std::holds_alternative<parus::oir::InstField>(di->data)) return false;
+            const auto& fd = std::get<parus::oir::InstField>(di->data);
+            return fd.field.find(name_prefix) == 0;
+        };
+
+        bool has_payload_drop = false;
+        for (const auto& inst : oir.mod.insts) {
+            if (const auto* dr = std::get_if<parus::oir::InstDrop>(&inst.data)) {
+                if (slot_field_has_prefix(dr->slot, "__payload$")) {
+                    has_payload_drop = true;
+                    break;
+                }
+            }
+        }
+
+        ok &= require_(has_payload_drop,
+                       "try expr discard path must drop the active recoverable payload exactly once");
         return ok;
     }
 
@@ -1947,6 +2045,7 @@ int main() {
         {"actor_ctor_and_runtime_lowering_ok", test_actor_ctor_and_runtime_lowering_ok},
         {"actor_handle_clone_release_lowering_ok", test_actor_handle_clone_release_lowering_ok},
         {"exception_payload_and_rethrow_lowering_ok", test_exception_payload_and_rethrow_lowering_ok},
+        {"try_expr_exception_payload_cleanup_lowering_ok", test_try_expr_exception_payload_cleanup_lowering_ok},
     };
 
     int failed = 0;
