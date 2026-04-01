@@ -21,6 +21,12 @@
 2. `backend/docs/Backend.md`
 3. `backend/docs/PARLIB.md`
 
+## TODO / Design Freeze
+
+1. `docs/todo/gOIR/README.md`
+2. `docs/todo/gOIR/GOIR_MODEL.md`
+3. `docs/todo/gOIR/GOIR_OPCODE_MODEL.md`
+
 ## Tooling
 
 1. `compiler/parusc/docs/README.md`
