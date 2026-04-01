@@ -546,7 +546,8 @@ namespace parusc::p0 {
 
         std::string build_enum_decl_payload_(
             const parus::ast::AstArena& ast,
-            const parus::ast::Stmt& s
+            const parus::ast::Stmt& s,
+            const parus::ty::TypePool& types
         );
 
         std::string build_field_decl_payload_(
@@ -1361,7 +1362,7 @@ namespace parusc::p0 {
                 !s.name.empty()) {
                 std::string payload{};
                 if (s.kind == parus::ast::StmtKind::kProtoDecl) payload = "parus_decl_kind=proto";
-                if (s.kind == parus::ast::StmtKind::kEnumDecl) payload = build_enum_decl_payload_(ast, s);
+                if (s.kind == parus::ast::StmtKind::kEnumDecl) payload = build_enum_decl_payload_(ast, s, types);
                 if (s.kind == parus::ast::StmtKind::kClassDecl) payload = "parus_decl_kind=class";
                 if (s.kind == parus::ast::StmtKind::kActorDecl) payload = "parus_decl_kind=actor";
                 append_generic_decl_payload_(payload, ast, s, types);
@@ -2497,7 +2498,8 @@ namespace parusc::p0 {
 
         std::string build_enum_decl_payload_(
             const parus::ast::AstArena& ast,
-            const parus::ast::Stmt& s
+            const parus::ast::Stmt& s,
+            const parus::ty::TypePool& types
         ) {
             std::string payload = "parus_decl_kind=enum";
             if (s.kind != parus::ast::StmtKind::kEnumDecl) return payload;
@@ -2506,11 +2508,6 @@ namespace parusc::p0 {
             const uint64_t end = begin + s.enum_variant_count;
             if (begin > ast.enum_variant_decls().size() || end > ast.enum_variant_decls().size()) {
                 return payload;
-            }
-
-            for (uint32_t i = 0; i < s.enum_variant_count; ++i) {
-                const auto& v = ast.enum_variant_decls()[s.enum_variant_begin + i];
-                if (v.payload_count != 0) return payload;
             }
 
             payload += "|layout=";
@@ -2525,6 +2522,31 @@ namespace parusc::p0 {
                 payload += std::string(v.name);
                 payload += ",";
                 payload += std::to_string(tag);
+
+                const uint64_t pb = v.payload_begin;
+                const uint64_t pe = pb + v.payload_count;
+                if (pb > ast.field_members().size() || pe > ast.field_members().size()) {
+                    return payload;
+                }
+                for (uint32_t mi = v.payload_begin; mi < v.payload_begin + v.payload_count; ++mi) {
+                    const auto& m = ast.field_members()[mi];
+                    payload += "|payload=";
+                    payload += std::string(v.name);
+                    payload += ",";
+                    payload += std::string(m.name);
+                    payload += ",";
+                    if (m.type != parus::ty::kInvalidType) {
+                        payload += payload_escape_value_(types.to_export_string(m.type));
+                        const auto semantic =
+                            parus::cimport::serialize_type_semantic_from_type(m.type, types);
+                        if (!semantic.empty()) {
+                            payload += "@";
+                            payload += payload_escape_value_(semantic);
+                        }
+                    } else {
+                        payload += "<invalid>";
+                    }
+                }
             }
             return payload;
         }
@@ -2991,7 +3013,9 @@ namespace parusc::p0 {
                     : (is_acts
                         ? root_acts_is_generic_template()
                         : (root_decl.decl_generic_param_count > 0));
-            out.is_public_export = root_decl.is_export && root_is_generic_template;
+            out.is_public_export =
+                root_decl.is_export &&
+                (root_is_generic_template || is_free_fn);
             if (root_decl.type != parus::ty::kInvalidType) {
                 out.declared_type_repr = types.to_export_string(root_decl.type);
                 out.declared_type_semantic =
@@ -3789,6 +3813,11 @@ namespace parusc::p0 {
                     !s.name.empty() &&
                     s.a != parus::ast::k_invalid_stmt &&
                     s.fn_generic_param_count > 0;
+                const bool is_exported_free_fn =
+                    s.kind == parus::ast::StmtKind::kFnDecl &&
+                    !s.name.empty() &&
+                    s.a != parus::ast::k_invalid_stmt &&
+                    s.is_export;
                 const bool is_generic_proto =
                     s.kind == parus::ast::StmtKind::kProtoDecl &&
                     !s.name.empty() &&
@@ -3808,7 +3837,7 @@ namespace parusc::p0 {
                 const bool is_enum_decl =
                     s.kind == parus::ast::StmtKind::kEnumDecl &&
                     !s.name.empty();
-                if (!is_generic_free_fn && !is_generic_proto && !is_generic_acts &&
+                if (!is_generic_free_fn && !is_exported_free_fn && !is_generic_proto && !is_generic_acts &&
                     !is_class_decl && !is_field_decl && !is_enum_decl) {
                     return true;
                 }
@@ -3817,7 +3846,10 @@ namespace parusc::p0 {
                 std::string qname = qualify_name_(ns, s.name);
                 std::string link_name_override{};
                 for (const auto& ex : current_exports) {
-                    if (is_generic_free_fn && ex.kind != parus::sema::SymbolKind::kFn) continue;
+                    if ((is_generic_free_fn || is_exported_free_fn) &&
+                        ex.kind != parus::sema::SymbolKind::kFn) {
+                        continue;
+                    }
                     if (is_generic_proto && ex.kind != parus::sema::SymbolKind::kType) continue;
                     if (is_generic_acts && ex.kind != parus::sema::SymbolKind::kAct) continue;
                     if (is_class_decl && ex.kind != parus::sema::SymbolKind::kType) continue;

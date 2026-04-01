@@ -2235,21 +2235,13 @@ namespace parus::tyck {
                                 is_cimport_call = true;
                                 cimport_callee_symbol = *sid;
                             }
-                            if (sym.is_external &&
-                                !sym.link_name.empty() &&
-                                sym.external_payload.find("parus_generic_decl") != std::string::npos) {
-                                if (auto templ_sid = lookup_imported_fn_template_by_link_name_(sym.link_name);
-                                    templ_sid.has_value()) {
-                                    overload_decl_ids = {*templ_sid};
-                                }
+                            if (sym.is_external) {
+                                overload_decl_ids = collect_imported_template_overloads_for_external_symbol_(sym);
                             }
                             if (overload_decl_ids.empty()) {
                                 auto it = fn_decl_by_name_.find(callee_name);
                                 if (it != fn_decl_by_name_.end()) {
                                     overload_decl_ids = it->second;
-                                } else if (sym.is_external &&
-                                           sym.external_payload.find("parus_generic_decl") != std::string::npos) {
-                                    overload_decl_ids = collect_imported_template_overloads_for_external_symbol_(sym);
                                 }
                             }
                         }
@@ -2307,13 +2299,9 @@ namespace parus::tyck {
                                     cimport_callee_symbol = resolved_sid;
                                 }
                                 if (overload_decl_ids.empty()) {
-                                    if (resolved_sym.is_external &&
-                                        !resolved_sym.link_name.empty() &&
-                                        resolved_sym.external_payload.find("parus_generic_decl") != std::string::npos) {
-                                        if (auto templ_sid = lookup_imported_fn_template_by_link_name_(resolved_sym.link_name);
-                                            templ_sid.has_value()) {
-                                            overload_decl_ids = {*templ_sid};
-                                        }
+                                    if (resolved_sym.is_external) {
+                                        overload_decl_ids =
+                                            collect_imported_template_overloads_for_external_symbol_(resolved_sym);
                                     }
                                     if (overload_decl_ids.empty()) {
                                         auto it = fn_decl_by_name_.find(callee_name);
@@ -3069,11 +3057,72 @@ namespace parus::tyck {
                     selected_external_is_template = candidate_is_template;
                     selected_external_sym = sid;
                     selected_external_fn_type = resolved_fn_t;
+                    selected_external_generic_args.clear();
+                    if (!meta.params.empty()) {
+                        selected_external_generic_args.reserve(meta.params.size());
+                        for (const auto& name : meta.params) {
+                            auto bit = bindings.find(name);
+                            selected_external_generic_args.push_back(
+                                bit != bindings.end() ? bit->second : ty::kInvalidType
+                            );
+                        }
+                    }
                 }
             }
 
             if (selected_external_sym != sema::SymbolTable::kNoScope &&
                 selected_external_fn_type != ty::kInvalidType) {
+                ast::StmtId imported_template_sid = ast::k_invalid_stmt;
+                if (selected_external_sym < sym_.symbols().size()) {
+                    const auto& selected_sym = sym_.symbol(selected_external_sym);
+                    const auto imported_sids =
+                        collect_imported_template_overloads_for_external_symbol_(selected_sym);
+                    if (!imported_sids.empty()) {
+                        imported_template_sid = imported_sids.front();
+                    }
+                }
+
+                if (imported_template_sid != ast::k_invalid_stmt) {
+                    MonoRequest req{};
+                    req.templ.template_sid = imported_template_sid;
+                    req.templ.source = MonoTemplateRef::SourceKind::kImportedFn;
+                    req.templ.producer_bundle = current_bundle_name_();
+                    req.templ.template_symbol = sym_.symbol(selected_external_sym).name;
+                    req.templ.link_name = sym_.symbol(selected_external_sym).link_name;
+                    if (auto it = imported_fn_template_index_by_sid_.find(imported_template_sid);
+                        it != imported_fn_template_index_by_sid_.end() &&
+                        it->second < explicit_imported_fn_templates_.size()) {
+                        const auto& imported = explicit_imported_fn_templates_[it->second];
+                        req.templ.producer_bundle = imported.producer_bundle;
+                        req.templ.template_symbol = imported.lookup_name.empty()
+                            ? req.templ.template_symbol
+                            : imported.lookup_name;
+                        req.templ.link_name = imported.link_name;
+                    }
+                    req.concrete_args = selected_external_generic_args;
+                    req.target_lane = "default";
+                    req.abi_lane = "static";
+                    if (auto inst = ensure_monomorphized_free_function_(req, e.span); inst.has_value()) {
+                        if (call_expr_id != ast::k_invalid_expr &&
+                            call_expr_id < expr_overload_target_cache_.size()) {
+                            expr_overload_target_cache_[call_expr_id] = inst->decl_sid;
+                        }
+                        if (call_expr_id != ast::k_invalid_expr &&
+                            call_expr_id < expr_external_callee_symbol_cache_.size()) {
+                            expr_external_callee_symbol_cache_[call_expr_id] = sema::SymbolTable::kNoScope;
+                        }
+                        if (call_expr_id != ast::k_invalid_expr &&
+                            call_expr_id < expr_external_callee_type_cache_.size()) {
+                            expr_external_callee_type_cache_[call_expr_id] = ty::kInvalidType;
+                        }
+                        if (call_expr_id != ast::k_invalid_expr &&
+                            call_expr_id < expr_external_receiver_expr_cache_.size()) {
+                            expr_external_receiver_expr_cache_[call_expr_id] = ast::k_invalid_expr;
+                        }
+                        return {true, types_.get(inst->fn_type).ret};
+                    }
+                }
+
                 const bool external_is_throwing =
                     (selected_external_sym < sym_.symbols().size()) &&
                     parse_external_throwing_payload_(sym_.symbol(selected_external_sym).external_payload);

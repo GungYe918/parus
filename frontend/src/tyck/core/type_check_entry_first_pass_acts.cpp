@@ -2205,6 +2205,30 @@
             out = neg ? -value : value;
             return true;
         };
+        auto payload_unescape_value_ = [](std::string_view raw) -> std::string {
+            std::string out{};
+            out.reserve(raw.size());
+            for (size_t i = 0; i < raw.size(); ++i) {
+                const char c = raw[i];
+                if (c == '%' && i + 2 < raw.size()) {
+                    auto hexv = [](char ch) -> int {
+                        if (ch >= '0' && ch <= '9') return ch - '0';
+                        if (ch >= 'a' && ch <= 'f') return 10 + (ch - 'a');
+                        if (ch >= 'A' && ch <= 'F') return 10 + (ch - 'A');
+                        return -1;
+                    };
+                    const int hi = hexv(raw[i + 1]);
+                    const int lo = hexv(raw[i + 2]);
+                    if (hi >= 0 && lo >= 0) {
+                        out.push_back(static_cast<char>((hi << 4) | lo));
+                        i += 2;
+                        continue;
+                    }
+                }
+                out.push_back(c);
+            }
+            return out;
+        };
 
         out_meta.layout = ast::FieldLayout::kNone;
         out_meta.is_layout_c = false;
@@ -2241,6 +2265,50 @@
                     vm.has_discriminant = true;
                     out_meta.variant_index_by_name[vm.name] = vm.index;
                     out_meta.variants.push_back(std::move(vm));
+                } else if (key == "payload") {
+                    const size_t comma1 = val.find(',');
+                    if (comma1 == std::string_view::npos || comma1 == 0 || comma1 + 1 >= val.size()) {
+                        return false;
+                    }
+                    const size_t comma2 = val.find(',', comma1 + 1);
+                    if (comma2 == std::string_view::npos || comma2 == comma1 + 1 || comma2 + 1 >= val.size()) {
+                        return false;
+                    }
+
+                    const std::string variant_name(val.substr(0, comma1));
+                    const std::string field_name(val.substr(comma1 + 1, comma2 - comma1 - 1));
+                    auto vit = out_meta.variant_index_by_name.find(variant_name);
+                    if (vit == out_meta.variant_index_by_name.end()) {
+                        return false;
+                    }
+
+                    const std::string encoded_type =
+                        payload_unescape_value_(val.substr(comma2 + 1));
+                    std::string_view type_text = encoded_type;
+                    std::string_view type_semantic{};
+                    if (const size_t at = encoded_type.find('@'); at != std::string::npos) {
+                        type_semantic = std::string_view(encoded_type).substr(at + 1);
+                        type_text = std::string_view(encoded_type).substr(0, at);
+                    }
+
+                    const ty::TypeId field_ty =
+                        parus::cimport::parse_external_type_repr(
+                            type_text,
+                            type_semantic,
+                            std::string(payload),
+                            types_
+                        );
+                    if (field_ty == ty::kInvalidType) {
+                        return false;
+                    }
+
+                    auto& vm = out_meta.variants[vit->second];
+                    EnumVariantFieldMeta fm{};
+                    fm.name = field_name;
+                    fm.storage_name = "__v" + std::to_string(vm.index) + "_" + field_name;
+                    fm.type = field_ty;
+                    vm.field_index_by_name[fm.name] = static_cast<uint32_t>(vm.fields.size());
+                    vm.fields.push_back(std::move(fm));
                 }
             }
             if (next == payload.size()) break;
@@ -3012,13 +3080,15 @@
         const auto& refs = ast_.path_refs();
         const uint64_t begin = owner.decl_path_ref_begin;
         const uint64_t end = begin + owner.decl_path_ref_count;
-        if (begin > refs.size() || end > refs.size()) return false;
+        if (begin > refs.size() || end > refs.size()) {
+            return external_type_declares_proto_(concrete_t);
+        }
         for (uint32_t i = owner.decl_path_ref_begin; i < owner.decl_path_ref_begin + owner.decl_path_ref_count; ++i) {
             if (auto psid = resolve_proto_decl_from_path_ref_(refs[i], use_span)) {
                 if (proto_decl_matches_constraint_sid_(*psid, proto_sid)) return true;
             }
         }
-        return false;
+        return external_type_declares_proto_(concrete_t);
     }
 
     bool TypeChecker::evaluate_generic_constraint_(

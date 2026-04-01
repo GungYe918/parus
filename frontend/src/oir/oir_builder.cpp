@@ -3,6 +3,7 @@
 #include <parus/oir/OIR.hpp>
 
 #include <parus/ast/Nodes.hpp>
+#include <parus/cimport/TypeSemantic.hpp>
 #include <parus/cimport/TypeReprNormalize.hpp>
 #include <parus/common/ModulePath.hpp>
 #include <parus/sir/Verify.hpp>
@@ -55,8 +56,43 @@ namespace parus::oir {
             std::vector<ParsedExternalParusFieldMember> members{};
         };
 
+        struct ParsedExternalParusEnumVariantField {
+            std::string name{};
+            std::string storage_name{};
+            parus::ty::TypeId type = parus::ty::kInvalidType;
+        };
+
+        struct ParsedExternalParusEnumVariant {
+            std::string name{};
+            uint32_t index = 0;
+            int64_t tag = 0;
+            std::vector<ParsedExternalParusEnumVariantField> fields{};
+        };
+
+        struct ParsedExternalParusEnumDecl {
+            bool ok = false;
+            FieldLayout layout = FieldLayout::None;
+            bool is_layout_c = false;
+            std::vector<std::string> generic_params{};
+            std::vector<ParsedExternalParusEnumVariant> variants{};
+        };
+
         std::string normalize_symbol_fragment_(std::string_view in);
         uint64_t fnv1a64_(std::string_view s);
+        std::string canonical_recoverable_type_semantic_(
+            parus::ty::TypeId type,
+            const parus::ty::TypePool& types,
+            const parus::sema::SymbolTable* sym
+        );
+        uint64_t recoverable_type_token_(
+            parus::ty::TypeId type,
+            const parus::ty::TypePool& types,
+            const parus::sema::SymbolTable* sym
+        );
+        std::string drop_thunk_symbol_for_type_(
+            parus::ty::TypeId type,
+            const parus::ty::TypePool& types
+        );
 
         bool known_concrete_leaf_type_name_without_symbols_(
             const parus::sir::Module& sir,
@@ -367,6 +403,114 @@ namespace parus::oir {
             }
 
             out.ok = true;
+            return out;
+        }
+
+        ParsedExternalParusEnumDecl parse_external_parus_enum_decl_payload_(
+            std::string_view payload,
+            const parus::ty::TypePool& types_in
+        ) {
+            ParsedExternalParusEnumDecl out{};
+            if (!payload.starts_with("parus_decl_kind=enum")) return out;
+            auto& types = const_cast<parus::ty::TypePool&>(types_in);
+
+            auto parse_i64_ = [](std::string_view text, int64_t& out_val) -> bool {
+                if (text.empty()) return false;
+                bool neg = false;
+                size_t pos = 0;
+                if (text[0] == '-') {
+                    neg = true;
+                    pos = 1;
+                    if (pos >= text.size()) return false;
+                }
+                int64_t value = 0;
+                for (; pos < text.size(); ++pos) {
+                    const char ch = text[pos];
+                    if (ch < '0' || ch > '9') return false;
+                    value = value * 10 + static_cast<int64_t>(ch - '0');
+                }
+                out_val = neg ? -value : value;
+                return true;
+            };
+
+            size_t pos = 0;
+            while (pos < payload.size()) {
+                size_t next = payload.find('|', pos);
+                if (next == std::string_view::npos) next = payload.size();
+                const std::string_view part = payload.substr(pos, next - pos);
+                const size_t eq = part.find('=');
+                if (eq != std::string_view::npos && eq + 1 < part.size()) {
+                    const std::string_view key = part.substr(0, eq);
+                    const std::string_view val = part.substr(eq + 1);
+                    if (key == "layout") {
+                        out.is_layout_c = (val == "c");
+                        out.layout = out.is_layout_c ? FieldLayout::C : FieldLayout::None;
+                    } else if (key == "gparam") {
+                        const std::string param = payload_unescape_value_(val);
+                        if (std::find(out.generic_params.begin(), out.generic_params.end(), param) ==
+                            out.generic_params.end()) {
+                            out.generic_params.push_back(param);
+                        }
+                    } else if (key == "variant") {
+                        const size_t comma = val.rfind(',');
+                        if (comma == std::string_view::npos || comma == 0 || comma + 1 >= val.size()) {
+                            return {};
+                        }
+                        int64_t tag = 0;
+                        if (!parse_i64_(val.substr(comma + 1), tag)) return {};
+
+                        ParsedExternalParusEnumVariant vm{};
+                        vm.name.assign(val.substr(0, comma));
+                        vm.index = static_cast<uint32_t>(out.variants.size());
+                        vm.tag = tag;
+                        out.variants.push_back(std::move(vm));
+                    } else if (key == "payload") {
+                        const size_t comma1 = val.find(',');
+                        if (comma1 == std::string_view::npos || comma1 == 0 || comma1 + 1 >= val.size()) {
+                            return {};
+                        }
+                        const size_t comma2 = val.find(',', comma1 + 1);
+                        if (comma2 == std::string_view::npos || comma2 == comma1 + 1 || comma2 + 1 >= val.size()) {
+                            return {};
+                        }
+
+                        const std::string variant_name(val.substr(0, comma1));
+                        const std::string field_name(val.substr(comma1 + 1, comma2 - comma1 - 1));
+                        auto vit = std::find_if(
+                            out.variants.begin(),
+                            out.variants.end(),
+                            [&](const ParsedExternalParusEnumVariant& vm) { return vm.name == variant_name; }
+                        );
+                        if (vit == out.variants.end()) return {};
+
+                        const std::string encoded_type = payload_unescape_value_(val.substr(comma2 + 1));
+                        std::string_view type_text = encoded_type;
+                        std::string_view type_semantic{};
+                        if (const size_t at = encoded_type.find('@'); at != std::string::npos) {
+                            type_semantic = std::string_view(encoded_type).substr(at + 1);
+                            type_text = std::string_view(encoded_type).substr(0, at);
+                        }
+
+                        const parus::ty::TypeId field_ty = parus::cimport::parse_external_type_repr(
+                            type_text,
+                            type_semantic,
+                            {},
+                            types
+                        );
+                        if (field_ty == parus::ty::kInvalidType) return {};
+
+                        ParsedExternalParusEnumVariantField fm{};
+                        fm.name = field_name;
+                        fm.storage_name = "__v" + std::to_string(vit->index) + "_" + field_name;
+                        fm.type = field_ty;
+                        vit->fields.push_back(std::move(fm));
+                    }
+                }
+                if (next == payload.size()) break;
+                pos = next + 1;
+            }
+
+            out.ok = !out.variants.empty();
             return out;
         }
 
@@ -962,10 +1106,6 @@ namespace parus::oir {
                 return payload_types;
             }
 
-            std::string exc_payload_field_name_(TypeId payload_ty) const {
-                return "__payload$" + std::to_string(static_cast<uint32_t>(payload_ty));
-            }
-
             ValueId exception_ctx_value_(ValueId ctx = kInvalidId) {
                 if (ctx != kInvalidId) return ctx;
                 if (current_exc_ctx != kInvalidId) return current_exc_ctx;
@@ -979,56 +1119,32 @@ namespace parus::oir {
                 return exc_ctx_type != kInvalidId && exc_root_global != kInvalidId;
             }
 
-            bool has_exception_payload_type_(TypeId payload_ty) const {
-                if (exc_payload_types == nullptr || payload_ty == kInvalidId) return false;
-                return std::find(exc_payload_types->begin(), exc_payload_types->end(), payload_ty) != exc_payload_types->end();
+            uint64_t recoverable_type_token_for_(TypeId payload_ty) const {
+                if (payload_ty == kInvalidId || types == nullptr) return 0;
+                return recoverable_type_token_(payload_ty, *types, symtab);
             }
 
-            void emit_drop_dynamic_exc_payload_(ValueId dynamic_ty, ValueId ctx = kInvalidId) {
-                if (dynamic_ty == kInvalidId || out == nullptr || types == nullptr) return;
-                const auto payload_types = exception_payload_types_in_order_();
-                std::vector<TypeId> droppable_types{};
-                droppable_types.reserve(payload_types.size());
-                for (const auto ty : payload_types) {
-                    if (type_needs_drop_(ty)) {
-                        droppable_types.push_back(ty);
-                    }
-                }
-                if (droppable_types.empty()) return;
-
-                ValueId cmp_type = dynamic_ty;
-                const TypeId i64t = i64_type_();
-                if (out != nullptr && static_cast<size_t>(dynamic_ty) < out->values.size()) {
-                    const TypeId vt = out->values[dynamic_ty].ty;
-                    if (vt != kInvalidId && i64t != kInvalidId && vt != i64t) {
-                        cmp_type = emit_cast(i64t, Effect::Pure, CastKind::As, i64t, dynamic_ty);
-                    }
-                }
-
+            void emit_drop_dynamic_exc_payload_(ValueId /*dynamic_ty*/, ValueId ctx = kInvalidId) {
+                if (!has_exception_ctx_()) return;
+                const ValueId drop_fn = emit_load_exc_drop_fn_(ctx);
+                if (drop_fn == kInvalidId) return;
+                const ValueId null_fn = emit_const_null(ptr_type_());
+                const ValueId has_drop =
+                    emit_binop(bool_type_(), Effect::Pure, BinOp::Ne, drop_fn, null_fn);
+                const BlockId drop_bb = new_block();
                 const BlockId after_bb = new_block();
-                for (size_t i = 0; i < droppable_types.size(); ++i) {
-                    const TypeId payload_ty = droppable_types[i];
-                    const BlockId drop_bb = new_block();
-                    const BlockId next_bb = (i + 1 < droppable_types.size()) ? new_block() : after_bb;
-                    const ValueId want_ty =
-                        emit_const_int(i64t, std::to_string(static_cast<uint32_t>(payload_ty)));
-                    const ValueId cond =
-                        emit_binop(bool_type_(), Effect::Pure, BinOp::Eq, cmp_type, want_ty);
-                    condbr(cond, drop_bb, {}, next_bb, {});
+                condbr(has_drop, drop_bb, {}, after_bb, {});
 
-                    def->blocks.push_back(drop_bb);
-                    cur_bb = drop_bb;
-                    const ValueId payload_ptr = emit_exc_payload_ptr_(payload_ty, ctx);
-                    if (payload_ptr != kInvalidId) {
-                        emit_drop(payload_ty, payload_ptr);
-                    }
-                    br(after_bb, {});
-
-                    if (next_bb != after_bb) {
-                        def->blocks.push_back(next_bb);
-                        cur_bb = next_bb;
-                    }
-                }
+                def->blocks.push_back(drop_bb);
+                cur_bb = drop_bb;
+                (void)emit_call(
+                    (types != nullptr)
+                        ? static_cast<TypeId>(types->builtin(parus::ty::Builtin::kUnit))
+                        : kInvalidId,
+                    drop_fn,
+                    {emit_exc_payload_bytes_ptr_(ctx)}
+                );
+                br(after_bb, {});
 
                 def->blocks.push_back(after_bb);
                 cur_bb = after_bb;
@@ -1036,7 +1152,7 @@ namespace parus::oir {
 
             void emit_drop_active_exc_payload_(ValueId ctx = kInvalidId) {
                 if (!has_exception_ctx_()) return;
-                emit_drop_dynamic_exc_payload_(emit_load_exc_type_(ctx), ctx);
+                emit_drop_dynamic_exc_payload_(kInvalidId, ctx);
             }
 
             void emit_clear_exc_state_(bool drop_payload, ValueId ctx = kInvalidId) {
@@ -1046,18 +1162,16 @@ namespace parus::oir {
                 }
                 emit_set_exc_active_(false, ctx);
                 emit_set_exc_type_(kInvalidId, ctx);
+                emit_set_exc_payload_size_(0u, ctx);
+                emit_set_exc_drop_fn_null_(ctx);
             }
 
             void emit_init_exc_ctx_(ValueId ctx) {
                 if (ctx == kInvalidId) return;
                 emit_set_exc_active_(false, ctx);
                 emit_set_exc_type_(kInvalidId, ctx);
-            }
-
-            void emit_copy_exc_payload_by_type_(TypeId payload_ty, ValueId src_ctx, ValueId dst_ctx) {
-                if (payload_ty == kInvalidId || src_ctx == kInvalidId || dst_ctx == kInvalidId) return;
-                const ValueId payload = emit_load_exc_payload_(payload_ty, src_ctx);
-                emit_store_exc_payload_(payload_ty, payload, dst_ctx);
+                emit_set_exc_payload_size_(0u, ctx);
+                emit_set_exc_drop_fn_null_(ctx);
             }
 
             void emit_move_exc_state_(ValueId src_ctx, ValueId dst_ctx) {
@@ -1077,45 +1191,9 @@ namespace parus::oir {
 
                 def->blocks.push_back(has_exc_bb);
                 cur_bb = has_exc_bb;
-                const ValueId dynamic_ty = emit_load_exc_type_(src_ctx);
-                const auto payload_types = exception_payload_types_in_order_();
-                if (payload_types.empty()) {
-                    emit_set_exc_type_from_value_(dynamic_ty, dst_ctx);
-                    emit_set_exc_active_(true, dst_ctx);
-                    emit_clear_exc_state_(/*drop_payload=*/false, src_ctx);
-                    br(after_bb, {});
-                } else {
-                    for (size_t i = 0; i < payload_types.size(); ++i) {
-                        const TypeId payload_ty = payload_types[i];
-                        const BlockId copy_bb = new_block();
-                        const BlockId next_bb = (i + 1 < payload_types.size()) ? new_block() : after_bb;
-                        const ValueId want_ty =
-                            emit_const_int(i64_type_(), std::to_string(static_cast<uint32_t>(payload_ty)));
-                        const ValueId cond =
-                            emit_binop(bool_type_(), Effect::Pure, BinOp::Eq, dynamic_ty, want_ty);
-                        condbr(cond, copy_bb, {}, next_bb, {});
-
-                        def->blocks.push_back(copy_bb);
-                        cur_bb = copy_bb;
-                        emit_copy_exc_payload_by_type_(payload_ty, src_ctx, dst_ctx);
-                        emit_set_exc_type_(payload_ty, dst_ctx);
-                        emit_set_exc_active_(true, dst_ctx);
-                        emit_clear_exc_state_(/*drop_payload=*/false, src_ctx);
-                        br(after_bb, {});
-
-                        if (next_bb != after_bb) {
-                            def->blocks.push_back(next_bb);
-                            cur_bb = next_bb;
-                        }
-                    }
-
-                    if (cur_bb != after_bb && !has_term()) {
-                        emit_set_exc_type_from_value_(dynamic_ty, dst_ctx);
-                        emit_set_exc_active_(true, dst_ctx);
-                        emit_clear_exc_state_(/*drop_payload=*/false, src_ctx);
-                        br(after_bb, {});
-                    }
-                }
+                emit_store(dst_ctx, emit_load(exc_ctx_type, src_ctx));
+                emit_clear_exc_state_(/*drop_payload=*/false, src_ctx);
+                br(after_bb, {});
 
                 def->blocks.push_back(after_bb);
                 cur_bb = after_bb;
@@ -1453,6 +1531,20 @@ namespace parus::oir {
                 return r;
             }
 
+            ValueId emit_symbol_ref(const std::string& name) {
+                const TypeId ptr_ty =
+                    (types != nullptr)
+                        ? static_cast<TypeId>(types->builtin(parus::ty::Builtin::kNull))
+                        : kInvalidId;
+                ValueId r = make_value(ptr_ty, Effect::Pure);
+                Inst inst{};
+                inst.data = InstSymbolRef{name};
+                inst.eff = Effect::Pure;
+                inst.result = r;
+                emit_inst(inst);
+                return r;
+            }
+
             ValueId emit_global_ref(uint32_t gid, const std::string& name) {
                 TypeId slot_ty = kInvalidId;
                 if (out != nullptr && (size_t)gid < out->globals.size()) {
@@ -1700,7 +1792,19 @@ namespace parus::oir {
             ValueId emit_exc_type_ptr_(ValueId ctx = kInvalidId) {
                 const ValueId ctx_v = exception_ctx_value_(ctx);
                 if (ctx_v == kInvalidId) return kInvalidId;
-                return emit_field(i64_type_(), ctx_v, "__type");
+                return emit_field(u64_type_(), ctx_v, "__type_token");
+            }
+
+            ValueId emit_exc_payload_size_ptr_(ValueId ctx = kInvalidId) {
+                const ValueId ctx_v = exception_ctx_value_(ctx);
+                if (ctx_v == kInvalidId) return kInvalidId;
+                return emit_field(u32_type_(), ctx_v, "__payload_size");
+            }
+
+            ValueId emit_exc_drop_fn_ptr_(ValueId ctx = kInvalidId) {
+                const ValueId ctx_v = exception_ctx_value_(ctx);
+                if (ctx_v == kInvalidId) return kInvalidId;
+                return emit_field(ptr_type_(), ctx_v, "__drop_fn");
             }
 
             bool value_is_address_like_(ValueId v) const {
@@ -1718,10 +1822,15 @@ namespace parus::oir {
             }
 
             ValueId emit_exc_payload_ptr_(TypeId payload_ty, ValueId ctx = kInvalidId) {
-                if (!has_exception_payload_type_(payload_ty)) return kInvalidId;
                 const ValueId ctx_v = exception_ctx_value_(ctx);
                 if (ctx_v == kInvalidId) return kInvalidId;
-                return emit_field(payload_ty, ctx_v, exc_payload_field_name_(payload_ty));
+                return emit_field(payload_ty, ctx_v, "__payload");
+            }
+
+            ValueId emit_exc_payload_bytes_ptr_(ValueId ctx = kInvalidId) {
+                const ValueId ctx_v = exception_ctx_value_(ctx);
+                if (ctx_v == kInvalidId) return kInvalidId;
+                return emit_field(ptr_type_(), ctx_v, "__payload");
             }
 
             TypeId bool_type_() const {
@@ -1778,8 +1887,8 @@ namespace parus::oir {
             void emit_set_exc_type_(TypeId payload_ty, ValueId ctx = kInvalidId) {
                 const ValueId ptr = emit_exc_type_ptr_(ctx);
                 if (ptr == kInvalidId) return;
-                const uint32_t raw = (payload_ty == kInvalidId) ? 0u : (uint32_t)payload_ty;
-                const ValueId vv = emit_const_int(i64_type_(), std::to_string(raw));
+                const uint64_t raw = recoverable_type_token_for_(payload_ty);
+                const ValueId vv = emit_const_int(u64_type_(), std::to_string(raw));
                 emit_store(ptr, vv);
             }
 
@@ -1789,12 +1898,34 @@ namespace parus::oir {
                 ValueId store_v = dynamic_ty;
                 if (out != nullptr && (size_t)dynamic_ty < out->values.size()) {
                     const TypeId vt = out->values[dynamic_ty].ty;
-                    const TypeId i64t = i64_type_();
-                    if (vt != kInvalidId && i64t != kInvalidId && vt != i64t) {
-                        store_v = emit_cast(i64t, Effect::Pure, CastKind::As, i64t, dynamic_ty);
+                    const TypeId u64t = u64_type_();
+                    if (vt != kInvalidId && u64t != kInvalidId && vt != u64t) {
+                        store_v = emit_cast(u64t, Effect::Pure, CastKind::As, u64t, dynamic_ty);
                     }
                 }
                 emit_store(ptr, store_v);
+            }
+
+            void emit_set_exc_payload_size_(uint32_t payload_size, ValueId ctx = kInvalidId) {
+                const ValueId ptr = emit_exc_payload_size_ptr_(ctx);
+                if (ptr == kInvalidId) return;
+                emit_store(ptr, emit_const_int(u32_type_(), std::to_string(payload_size)));
+            }
+
+            void emit_set_exc_drop_fn_(TypeId payload_ty, ValueId ctx = kInvalidId) {
+                const ValueId ptr = emit_exc_drop_fn_ptr_(ctx);
+                if (ptr == kInvalidId) return;
+                if (payload_ty == kInvalidId || !type_needs_drop_(payload_ty) || types == nullptr) {
+                    emit_store(ptr, emit_const_null(ptr_type_()));
+                    return;
+                }
+                emit_store(ptr, emit_symbol_ref(drop_thunk_symbol_for_type_(payload_ty, *types)));
+            }
+
+            void emit_set_exc_drop_fn_null_(ValueId ctx = kInvalidId) {
+                const ValueId ptr = emit_exc_drop_fn_ptr_(ctx);
+                if (ptr == kInvalidId) return;
+                emit_store(ptr, emit_const_null(ptr_type_()));
             }
 
             void emit_store_exc_payload_(TypeId payload_ty, ValueId payload, ValueId ctx = kInvalidId) {
@@ -1831,8 +1962,20 @@ namespace parus::oir {
 
             ValueId emit_load_exc_type_(ValueId ctx = kInvalidId) {
                 const ValueId ptr = emit_exc_type_ptr_(ctx);
-                if (ptr == kInvalidId) return emit_const_int(i64_type_(), "0");
-                return emit_load(i64_type_(), ptr);
+                if (ptr == kInvalidId) return emit_const_int(u64_type_(), "0");
+                return emit_load(u64_type_(), ptr);
+            }
+
+            ValueId emit_load_exc_payload_size_(ValueId ctx = kInvalidId) {
+                const ValueId ptr = emit_exc_payload_size_ptr_(ctx);
+                if (ptr == kInvalidId) return emit_const_int(u32_type_(), "0");
+                return emit_load(u32_type_(), ptr);
+            }
+
+            ValueId emit_load_exc_drop_fn_(ValueId ctx = kInvalidId) {
+                const ValueId ptr = emit_exc_drop_fn_ptr_(ctx);
+                if (ptr == kInvalidId) return emit_const_null(ptr_type_());
+                return emit_load(ptr_type_(), ptr);
             }
 
             ValueId emit_default_value_for_type_(TypeId t) {
@@ -2563,6 +2706,130 @@ namespace parus::oir {
                 h *= 1099511628211ull;
             }
             return h;
+        }
+
+        std::string canonical_recoverable_type_semantic_(
+            parus::ty::TypeId type,
+            const parus::ty::TypePool& types,
+            const parus::sema::SymbolTable* sym
+        ) {
+            parus::cimport::TypeSemanticNode node{};
+            if (!parus::cimport::build_type_semantic_from_type(type, types, node)) {
+                return parus::cimport::serialize_type_semantic_from_type(type, types);
+            }
+
+            const auto find_external_canonical_name_for_ = [&](std::string_view visible_name) -> std::optional<std::string> {
+                if (sym == nullptr || visible_name.empty()) return std::nullopt;
+                const auto type_base_name_ = [&](parus::ty::TypeId sid) -> std::string {
+                    if (sid == parus::ty::kInvalidType) return {};
+                    std::vector<std::string_view> spath{};
+                    std::vector<parus::ty::TypeId> sargs{};
+                    if (!types.decompose_named_user(sid, spath, sargs) || spath.empty()) return {};
+                    std::string joined{};
+                    for (size_t i = 0; i < spath.size(); ++i) {
+                        if (i != 0) joined += "::";
+                        joined += std::string(spath[i]);
+                    }
+                    return joined;
+                };
+                const auto same_base_name_ = [](std::string_view lhs, std::string_view rhs) {
+                    if (lhs.empty() || rhs.empty()) return false;
+                    if (lhs == rhs) return true;
+                    if (lhs.starts_with("core::") && lhs.substr(std::string_view("core::").size()) == rhs) return true;
+                    if (rhs.starts_with("core::") && rhs.substr(std::string_view("core::").size()) == lhs) return true;
+                    const size_t lsplit = lhs.rfind("::");
+                    const size_t rsplit = rhs.rfind("::");
+                    const std::string_view lleaf =
+                        (lsplit == std::string_view::npos) ? lhs : lhs.substr(lsplit + 2);
+                    const std::string_view rleaf =
+                        (rsplit == std::string_view::npos) ? rhs : rhs.substr(rsplit + 2);
+                    return lleaf == rleaf;
+                };
+                const auto matches_visible_name = [&](const parus::sema::Symbol& ss) {
+                    if (ss.kind != parus::sema::SymbolKind::kType || !ss.is_external) return false;
+                    if (ss.name == visible_name) return true;
+                    if (same_base_name_(ss.name, visible_name)) return true;
+                    return same_base_name_(type_base_name_(ss.declared_type), visible_name);
+                };
+                const auto build_canonical_name = [&](const parus::sema::Symbol& ss) {
+                    std::vector<std::string_view> path{};
+                    std::vector<parus::ty::TypeId> args{};
+                    if (types.decompose_named_user(ss.declared_type, path, args) && !path.empty()) {
+                        std::string joined{};
+                        for (size_t i = 0; i < path.size(); ++i) {
+                            if (i != 0) joined += "::";
+                            joined += std::string(path[i]);
+                        }
+                        return joined;
+                    }
+                    const std::string canonical_head =
+                        parus::normalize_core_public_module_head(ss.decl_bundle_name, ss.decl_module_head);
+                    std::string relative = ss.name;
+                    if (!ss.decl_module_head.empty()) {
+                        const std::string prefix = ss.decl_module_head + "::";
+                        if (relative == ss.decl_module_head) {
+                            relative.clear();
+                        } else if (relative.rfind(prefix, 0) == 0) {
+                            relative.erase(0, prefix.size());
+                        }
+                    }
+                    if (canonical_head.empty()) {
+                        return relative.empty() ? std::string(ss.name) : relative;
+                    }
+                    if (relative.empty()) return canonical_head;
+                    return canonical_head + "::" + relative;
+                };
+
+                for (const auto& ss : sym->symbols()) {
+                    if (!matches_visible_name(ss)) continue;
+                    if (ss.name == visible_name) {
+                        return build_canonical_name(ss);
+                    }
+                }
+                for (const auto& ss : sym->symbols()) {
+                    if (matches_visible_name(ss)) {
+                        return build_canonical_name(ss);
+                    }
+                }
+                return std::nullopt;
+            };
+
+            const auto rewrite_named_nodes_ = [&](const auto& self,
+                                                  parus::cimport::TypeSemanticNode& current) -> void {
+                if (current.kind == parus::cimport::TypeSemanticKind::kNamed) {
+                    if (auto canonical = find_external_canonical_name_for_(current.name);
+                        canonical.has_value()) {
+                        current.name = *canonical;
+                    }
+                }
+                for (auto& child : current.children) {
+                    self(self, child);
+                }
+            };
+            rewrite_named_nodes_(rewrite_named_nodes_, node);
+            return parus::cimport::serialize_type_semantic(node);
+        }
+
+        uint64_t recoverable_type_token_(
+            parus::ty::TypeId type,
+            const parus::ty::TypePool& types,
+            const parus::sema::SymbolTable* sym
+        ) {
+            if (type == parus::ty::kInvalidType) return 0;
+            const std::string canonical =
+                canonical_recoverable_type_semantic_(type, types, sym);
+            uint64_t token = fnv1a64_(canonical);
+            if (token == 0) token = 1;
+            return token;
+        }
+
+        std::string drop_thunk_symbol_for_type_(
+            parus::ty::TypeId type,
+            const parus::ty::TypePool& types
+        ) {
+            std::ostringstream hs;
+            hs << std::hex << fnv1a64_(types.to_string(type));
+            return "__parus_drop_" + hs.str();
         }
 
         /// @brief 함수 이름 + 시그니처를 기반으로 OIR 내부 함수명을 생성한다.
@@ -4910,8 +5177,12 @@ namespace parus::oir {
                         }
                     }
                 } else {
+                    const auto payload_size_align = type_size_align_(payload_ty);
+                    const uint32_t payload_size = payload_size_align.first;
                     emit_store_exc_payload_(payload_ty, payload, throw_ctx);
                     emit_set_exc_type_(payload_ty, throw_ctx);
+                    emit_set_exc_payload_size_(payload_size, throw_ctx);
+                    emit_set_exc_drop_fn_(payload_ty, throw_ctx);
                     emit_set_exc_active_(true, throw_ctx);
                 }
 
@@ -4985,8 +5256,19 @@ namespace parus::oir {
                         if (cc.has_typed_bind) {
                             next_bb = new_block();
                             const ValueId throw_ty = emit_load_exc_type_(local_exc_ctx);
-                            const ValueId want_ty = emit_const_int(i64_type_(), std::to_string((uint32_t)cc.bind_type));
-                            const ValueId cond = emit_binop(bool_type_(), Effect::Pure, BinOp::Eq, throw_ty, want_ty);
+                            const ValueId want_ty =
+                                emit_const_int(u64_type_(), std::to_string(recoverable_type_token_for_(cc.bind_type)));
+                            const ValueId token_match =
+                                emit_binop(bool_type_(), Effect::Pure, BinOp::Eq, throw_ty, want_ty);
+                            const auto [bind_size, bind_align] = type_size_align_(cc.bind_type);
+                            (void)bind_align;
+                            const ValueId throw_size = emit_load_exc_payload_size_(local_exc_ctx);
+                            const ValueId want_size =
+                                emit_const_int(u32_type_(), std::to_string(bind_size));
+                            const ValueId size_match =
+                                emit_binop(bool_type_(), Effect::Pure, BinOp::Eq, throw_size, want_size);
+                            const ValueId cond =
+                                emit_binop(bool_type_(), Effect::Pure, BinOp::LogicalAnd, token_match, size_match);
                             condbr(cond, catch_bb, {}, next_bb, {});
                         } else {
                             br(catch_bb, {});
@@ -6064,6 +6346,146 @@ namespace parus::oir {
             return true;
         };
 
+        auto ensure_external_parus_enum_layout = [&](parus::ty::TypeId tid) -> bool {
+            if (sym_ == nullptr || tid == parus::ty::kInvalidType) return false;
+            if (named_layout_by_type.find(tid) != named_layout_by_type.end()) return true;
+            if (actor_type_set.find(tid) != actor_type_set.end()) return false;
+
+            const auto& tt = ty_.get(tid);
+            if (tt.kind != parus::ty::Kind::kNamedUser) return false;
+
+            std::vector<std::string_view> path{};
+            std::vector<parus::ty::TypeId> args{};
+            if (!ty_.decompose_named_user(tid, path, args) || path.empty()) return false;
+
+            std::string base_name{};
+            for (size_t i = 0; i < path.size(); ++i) {
+                if (i != 0) base_name += "::";
+                base_name += std::string(path[i]);
+            }
+
+            auto type_base_name_ = [&](parus::ty::TypeId sid) -> std::string {
+                if (sid == parus::ty::kInvalidType) return {};
+                std::vector<std::string_view> spath{};
+                std::vector<parus::ty::TypeId> sargs{};
+                if (!ty_.decompose_named_user(sid, spath, sargs) || spath.empty()) return {};
+                std::string joined{};
+                for (size_t i = 0; i < spath.size(); ++i) {
+                    if (i != 0) joined += "::";
+                    joined += std::string(spath[i]);
+                }
+                return joined;
+            };
+
+            auto same_base_name_ = [&](std::string_view lhs, std::string_view rhs) -> bool {
+                if (lhs.empty() || rhs.empty()) return false;
+                if (lhs == rhs) return true;
+                if (lhs.starts_with("core::") && lhs.substr(std::string_view("core::").size()) == rhs) return true;
+                if (rhs.starts_with("core::") && rhs.substr(std::string_view("core::").size()) == lhs) return true;
+                const size_t lsplit = lhs.rfind("::");
+                const size_t rsplit = rhs.rfind("::");
+                const std::string_view lleaf =
+                    (lsplit == std::string_view::npos) ? lhs : lhs.substr(lsplit + 2);
+                const std::string_view rleaf =
+                    (rsplit == std::string_view::npos) ? rhs : rhs.substr(rsplit + 2);
+                return lleaf == rleaf;
+            };
+
+            auto lookup_external_enum_symbol_ = [&](std::string_view qname)
+                -> const parus::sema::Symbol* {
+                for (const auto& ss : sym_->symbols()) {
+                    if (!ss.is_external || ss.kind != parus::sema::SymbolKind::kType) continue;
+                    if (ss.external_payload.empty()) continue;
+                    if (!ss.external_payload.starts_with("parus_decl_kind=enum")) continue;
+                    if (ss.name == qname) {
+                        return &ss;
+                    }
+                    if (same_base_name_(type_base_name_(ss.declared_type), qname)) {
+                        return &ss;
+                    }
+                }
+                return nullptr;
+            };
+
+            const parus::sema::Symbol* enum_sym = lookup_external_enum_symbol_(base_name);
+            if (enum_sym == nullptr) {
+                const size_t split = base_name.find("::");
+                if (split != std::string::npos && split + 2 < base_name.size()) {
+                    enum_sym = lookup_external_enum_symbol_(base_name.substr(split + 2));
+                }
+            }
+            if (enum_sym == nullptr) {
+                const size_t split = base_name.rfind("::");
+                if (split != std::string::npos && split + 2 < base_name.size()) {
+                    enum_sym = lookup_external_enum_symbol_(base_name.substr(split + 2));
+                }
+            }
+            if (enum_sym == nullptr) return false;
+
+            const auto parsed = parse_external_parus_enum_decl_payload_(enum_sym->external_payload, ty_);
+            if (!parsed.ok) return false;
+
+            std::unordered_map<std::string, parus::ty::TypeId> subst{};
+            if (!parsed.generic_params.empty()) {
+                if (parsed.generic_params.size() != args.size()) return false;
+                for (size_t i = 0; i < parsed.generic_params.size(); ++i) {
+                    subst.emplace(parsed.generic_params[i], args[i]);
+                }
+            } else if (!args.empty()) {
+                return false;
+            }
+
+            FieldLayoutDecl of{};
+            of.name = ty_.to_string(tid);
+            of.self_type = tid;
+            of.layout = parsed.layout;
+
+            FieldMemberLayout tag{};
+            tag.name = "__tag";
+            tag.type = (TypeId)ty_.builtin(parus::ty::Builtin::kI32);
+            tag.offset = 0;
+            of.members.push_back(tag);
+
+            if (parsed.is_layout_c) {
+                of.align = 4u;
+                of.size = 4u;
+                out.mod.add_field(of);
+                named_layout_by_type[tid] = {4u, 4u};
+                return true;
+            }
+
+            uint32_t offset = 4u;
+            uint32_t struct_align = 4u;
+            for (const auto& variant : parsed.variants) {
+                for (const auto& field : variant.fields) {
+                    const parus::ty::TypeId concrete_member_ty =
+                        substitute_external_generic_params_(ty_, field.type, subst);
+                    const auto [member_size_raw, member_align_raw] =
+                        type_size_align(type_size_align, concrete_member_ty);
+                    const uint32_t member_size = std::max<uint32_t>(1u, member_size_raw);
+                    const uint32_t member_align = std::max<uint32_t>(1u, member_align_raw);
+                    if (of.layout == FieldLayout::C) {
+                        offset = align_to_(offset, member_align);
+                    }
+
+                    FieldMemberLayout om{};
+                    om.name = field.storage_name;
+                    om.type = concrete_member_ty;
+                    om.offset = offset;
+                    of.members.push_back(std::move(om));
+
+                    offset += member_size;
+                    struct_align = std::max(struct_align, member_align);
+                }
+            }
+
+            of.align = struct_align;
+            of.size = std::max<uint32_t>(1u, offset);
+            out.mod.add_field(of);
+            named_layout_by_type[tid] = {of.size, of.align};
+            return true;
+        };
+
         if (sym_ != nullptr) {
             for (const auto& ss : sym_->symbols()) {
                 if (!ss.is_external || ss.kind != parus::sema::SymbolKind::kType) continue;
@@ -6088,6 +6510,7 @@ namespace parus::oir {
         if (sym_ != nullptr) {
             for (parus::ty::TypeId tid = 0; tid < ty_.count(); ++tid) {
                 (void)ensure_external_parus_field_layout(ensure_external_parus_field_layout, tid);
+                (void)ensure_external_parus_enum_layout(tid);
             }
         }
 
@@ -6231,6 +6654,8 @@ namespace parus::oir {
             auto& mutable_types = const_cast<parus::ty::TypePool&>(ty_);
             const std::string_view exc_ctx_name = "__parus_exc_ctx";
             exc_ctx_ty = mutable_types.make_named_user_path(&exc_ctx_name, 1);
+            const TypeId exc_payload_bytes_ty =
+                mutable_types.make_array((TypeId)ty_.builtin(parus::ty::Builtin::kU8), true, 64);
 
             FieldLayoutDecl exc_ctx_layout{};
             exc_ctx_layout.name = "__parus_exc_ctx";
@@ -6253,12 +6678,12 @@ namespace parus::oir {
                 exc_align = std::max(exc_align, member_align);
             };
             append_exc_member("__active", (TypeId)ty_.builtin(parus::ty::Builtin::kBool));
-            append_exc_member("__type", (TypeId)ty_.builtin(parus::ty::Builtin::kI64));
-            for (const auto payload_ty : exc_payload_types) {
-                append_exc_member("__payload$" + std::to_string(static_cast<uint32_t>(payload_ty)), payload_ty);
-            }
-            exc_ctx_layout.align = std::max<uint32_t>(1u, exc_align);
-            exc_ctx_layout.size = std::max<uint32_t>(1u, align_to_(exc_offset, exc_align));
+            append_exc_member("__type_token", (TypeId)ty_.builtin(parus::ty::Builtin::kU64));
+            append_exc_member("__payload_size", (TypeId)ty_.builtin(parus::ty::Builtin::kU32));
+            append_exc_member("__drop_fn", (TypeId)ty_.builtin(parus::ty::Builtin::kNull));
+            append_exc_member("__payload", exc_payload_bytes_ty);
+            exc_ctx_layout.align = std::max<uint32_t>(16u, exc_align);
+            exc_ctx_layout.size = std::max<uint32_t>(1u, align_to_(exc_offset, exc_ctx_layout.align));
             out.mod.add_field(exc_ctx_layout);
             named_layout_by_type[exc_ctx_ty] = {exc_ctx_layout.size, exc_ctx_layout.align};
 

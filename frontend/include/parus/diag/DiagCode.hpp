@@ -189,6 +189,7 @@ namespace parus::diag {
         kThrowingCallRequiresTryExpr,     // direct ? -> non-? call must use try expr
         kThrowPayloadTypeNotAllowed,      // throw payload must be enum/struct value
         kThrowPayloadMustBeRecoverable,   // throw payload must satisfy Recoverable proto
+        kRecoverablePayloadExceedsExcCtxEnvelope, // recoverable payload exceeds fixed exc_ctx envelope
         kTryCatchNeedsAtLeastOneCatch,    // try block requires at least one catch clause
         kCatchBinderNameExpected,         // catch (...) binder name expected
         kUntypedCatchBinderRethrowOnly,   // catch(e) binder is an opaque rethrow token

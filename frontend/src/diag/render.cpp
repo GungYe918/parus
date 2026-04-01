@@ -195,6 +195,7 @@ namespace parus::diag {
             case Code::kThrowingCallRequiresTryExpr: return "ThrowingCallRequiresTryExpr";
             case Code::kThrowPayloadTypeNotAllowed: return "ThrowPayloadTypeNotAllowed";
             case Code::kThrowPayloadMustBeRecoverable: return "ThrowPayloadMustBeRecoverable";
+            case Code::kRecoverablePayloadExceedsExcCtxEnvelope: return "RecoverablePayloadExceedsExcCtxEnvelope";
             case Code::kTryCatchNeedsAtLeastOneCatch: return "TryCatchNeedsAtLeastOneCatch";
             case Code::kCatchBinderNameExpected: return "CatchBinderNameExpected";
             case Code::kUntypedCatchBinderRethrowOnly: return "UntypedCatchBinderRethrowOnly";
@@ -573,6 +574,7 @@ namespace parus::diag {
             case Code::kThrowingCallRequiresTryExpr: return "direct call to throwing function is not allowed here; wrap the call with 'try <call>'";
             case Code::kThrowPayloadTypeNotAllowed: return "throw payload type is not allowed in v0 (expected enum/struct, got {0})";
             case Code::kThrowPayloadMustBeRecoverable: return "throw payload must satisfy Recoverable proto (got {0})";
+            case Code::kRecoverablePayloadExceedsExcCtxEnvelope: return "recoverable payload exceeds the fixed exception context envelope (size {0}/64, align {1}/16)";
             case Code::kTryCatchNeedsAtLeastOneCatch: return "try-catch requires at least one catch clause";
             case Code::kCatchBinderNameExpected: return "catch binder name is required (use: catch(name) or catch(name: Type))";
             case Code::kUntypedCatchBinderRethrowOnly: return "untyped catch binder is an opaque rethrow token and may only be used as 'throw e'";
@@ -957,6 +959,7 @@ namespace parus::diag {
             case Code::kThrowingCallRequiresTryExpr: return "여기서는 throwing 함수 직접 호출이 허용되지 않습니다. 'try <call>'로 감싸야 합니다";
             case Code::kThrowPayloadTypeNotAllowed: return "v0에서 throw payload 타입이 허용되지 않습니다(enum/struct 필요, 현재 {0})";
             case Code::kThrowPayloadMustBeRecoverable: return "throw payload는 Recoverable proto를 만족해야 합니다(현재 {0})";
+            case Code::kRecoverablePayloadExceedsExcCtxEnvelope: return "recoverable payload가 고정 exception context envelope을 초과합니다(size {0}/64, align {1}/16)";
             case Code::kTryCatchNeedsAtLeastOneCatch: return "try-catch에는 최소 1개의 catch 절이 필요합니다";
             case Code::kCatchBinderNameExpected: return "catch 바인더 이름이 필요합니다 (예: catch(name), catch(name: Type))";
             case Code::kUntypedCatchBinderRethrowOnly: return "untyped catch 바인더는 opaque rethrow token이며 'throw e' 형태로만 사용할 수 있습니다";

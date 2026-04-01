@@ -207,6 +207,19 @@ Parus v0는 예외 채널을 2개로 분리한다.
 언와인딩 런타임은 코어 필수가 아니며, hosted/interop 후속 레이어의 opt-in 과제로 남긴다.
 또한 Recoverable payload는 value-only이며 owner-handle payload(`~T`)를 포함할 수 없다.
 Recoverable ABI는 hidden `exc_ctx*`와 single thread-local root exception context를 사용한다.
+`exc_ctx`는 고정 C-layout erased context로 아래 필드를 가진다.
+
+1. `__active: bool`
+2. `__type_token: u64`
+   - canonical type semantic의 FNV-1a 64-bit hash
+   - `0`은 inactive sentinel이다
+3. `__payload_size: u32`
+4. `__drop_fn: *const void`
+   - drop 불필요 payload면 null
+5. `__payload: [u8; 64]`
+   - inline envelope, align 16
+
+Recoverable payload는 `size <= 64` 및 `align <= 16`을 만족해야 하며, heap fallback은 없다.
 ordinary `?` 함수의 정상 경로는 caller-provided context 전달과 local check만 부담한다.
 C ABI / `cimport` 호출은 Recoverable source가 아니며 hidden `exc_ctx*`를 받지 않는다.
 

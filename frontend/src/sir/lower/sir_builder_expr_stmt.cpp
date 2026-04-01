@@ -607,7 +607,7 @@ namespace parus::sir::detail {
                         }
                     }
                 }
-                if (use_external_callee) {
+                if (use_external_callee && overload_sid == ast::k_invalid_stmt) {
                     v.callee_sym = external_callee_sym;
                     v.callee_decl_stmt = ast::k_invalid_stmt;
                 }

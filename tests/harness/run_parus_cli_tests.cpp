@@ -8019,12 +8019,17 @@ bool test_exception_non_unwind_runtime_and_rethrow() {
         "  }\n"
         "}\n"
         "\n"
-        "def main?() -> i32 {\n"
+        "def run?() -> i32 {\n"
         "  try {\n"
         "    return mid();\n"
         "  } catch (e: Err) {\n"
         "    return e.code;\n"
         "  }\n"
+        "}\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  let v: i32? = try run();\n"
+        "  return v ?? -1i32;\n"
         "}\n";
     if (!write_text(main_pr, src)) {
         std::cerr << "failed to write exception runtime test file\n";
@@ -8527,6 +8532,159 @@ bool test_exception_c_abi_wrapper_runtime() {
     }
     if (!contains(out_run, "EXIT:7")) {
         std::cerr << "C ABI wrapper runtime exit mismatch (expected 7)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
+bool test_exception_imported_direct_typed_catch_runtime() {
+    const std::string bin = PARUS_BUILD_BIN;
+
+    const auto sysroot_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_target.has_value()) {
+        std::cerr << "installed sysroot manifest not found for imported exception runtime test\n";
+        return false;
+    }
+    const std::string sysroot = sysroot_target->first;
+    const std::string target = sysroot_target->second;
+    const auto installed_core_index_path =
+        std::filesystem::path(sysroot) / ".cache/exports/core.exports.json";
+    if (!std::filesystem::exists(installed_core_index_path)) {
+        std::cerr << "installed core export-index not found for imported exception runtime test\n";
+        return false;
+    }
+
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-exception-imported-direct-runtime";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto lib_pr = temp_root / "lib.pr";
+    const std::string lib_src =
+        "export proto Recoverable {};\n"
+        "\n"
+        "export enum Err: Recoverable {\n"
+        "  case Code(code: i32),\n"
+        "};\n"
+        "\n"
+        "export def leaf?() -> i32 {\n"
+        "  throw Err::Code(code: 7i32);\n"
+        "}\n";
+    if (!write_text(lib_pr, lib_src)) {
+        std::cerr << "failed to write imported exception library source\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto lib_index = temp_root / "lib.exports.json";
+    auto [rc_idx, out_idx] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + lib_pr.string() +
+        "\" -fsyntax-only --bundle-name exlib --bundle-root \"" + temp_root.string() +
+        "\" --module-head api --bundle-source \"" + lib_pr.string() +
+        "\" --load-export-index \"" + installed_core_index_path.string() +
+        "\" --emit-export-index \"" + lib_index.string() + "\"");
+    if (rc_idx != 0) {
+        std::cerr << "failed to emit imported exception export-index\n" << out_idx;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "main";
+    const std::string main_src =
+        "import api as api;\n"
+        "\n"
+        "def run?() -> i32 {\n"
+        "  try {\n"
+        "    return api::leaf();\n"
+        "  } catch (e: api::Err) {\n"
+        "    switch (e) {\n"
+        "    case api::Err::Code(code: c): { return c; }\n"
+        "    }\n"
+        "    return -2i32;\n"
+        "  }\n"
+        "}\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  let v: i32? = try run();\n"
+        "  return v ?? -1i32;\n"
+        "}\n";
+    if (!write_text(main_pr, main_src)) {
+        std::cerr << "failed to write imported exception runtime sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_build, out_build] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + main_pr.string() +
+        "\" --sysroot \"" + sysroot + "\"" +
+        " --target " + target +
+        " -o \"" + exe.string() + "\"" +
+        " --load-export-index \"" + installed_core_index_path.string() + "\"" +
+        " --load-export-index \"" + lib_index.string() + "\"");
+    if (rc_build != 0) {
+        std::cerr << "imported direct throwing sample should compile/link\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_run, out_run] = run_capture("\"" + exe.string() + "\"; echo EXIT:$?");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_run != 0) {
+        std::cerr << "imported direct throwing sample should execute\n" << out_run;
+        return false;
+    }
+    if (!contains(out_run, "EXIT:7")) {
+        std::cerr << "imported direct throwing sample exit mismatch (expected 7)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
+bool test_exception_recoverable_payload_envelope_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-exception-envelope-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "proto Recoverable {};\n"
+        "\n"
+        "struct Big: Recoverable {\n"
+        "  data: i64[9];\n"
+        "};\n"
+        "\n"
+        "def main?() -> i32 {\n"
+        "  throw Big {\n"
+        "    data: [0i64, 1i64, 2i64, 3i64, 4i64, 5i64, 6i64, 7i64, 8i64],\n"
+        "  };\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write recoverable payload envelope rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture("\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc == 0) {
+        std::cerr << "oversize recoverable payload must fail\n" << out;
+        return false;
+    }
+    if (!contains(out, "RecoverablePayloadExceedsExcCtxEnvelope") ||
+        !contains(out, "64") ||
+        !contains(out, "16")) {
+        std::cerr << "oversize recoverable payload rejection must explain fixed 64/16 envelope\n" << out;
         return false;
     }
     return true;
@@ -9794,6 +9952,8 @@ int main() {
     const bool ok124 = test_exception_try_expr_c_abi_call_rejected();
     const bool ok125 = test_exception_try_expr_cimport_call_rejected();
     const bool ok126 = test_exception_c_abi_wrapper_runtime();
+    const bool ok127 = test_exception_imported_direct_typed_catch_runtime();
+    const bool ok128 = test_exception_recoverable_payload_envelope_rejected();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
@@ -9806,7 +9966,7 @@ int main() {
         !ok95 || !ok96 || !ok97 || !ok98 || !ok99 || !ok100 || !ok101 || !ok102 || !ok103 || !ok104 || !ok105 ||
         !ok106 || !ok107 || !ok108 || !ok109 || !ok110 || !ok111 || !ok112 || !ok113 || !ok114 || !ok115 ||
         !ok116 || !ok117 || !ok118 || !ok119 || !ok120 || !ok121 || !ok122 || !ok123 || !ok124 || !ok125 ||
-        !ok126) {
+        !ok126 || !ok127 || !ok128) {
         return 1;
     }
 

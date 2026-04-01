@@ -98,12 +98,12 @@ def make(p: *const c_char, n: usize) -> CStr {
 
 // Creates a borrowed CStr from a raw C pointer.
 export def from_ptr(p: *const c_char) -> CStr {
-    return CStr::from_ptr(p);
+    return CStr(p, 0usize);
 }
 
 // Creates a borrowed CStr from explicit raw parts.
 export def from_raw_parts(p: *const c_char, n: usize) -> CStr {
-    return CStr::from_raw_parts(p, n);
+    return make(p, n);
 }
 
 // Returns cached byte length metadata including the trailing NUL when known.
@@ -118,17 +118,23 @@ export def len(s: CStr) -> usize {
 
 // Validates bytes that must already include a trailing NUL.
 export def from_bytes_with_nul(bytes: *const c_char, len: usize) -> CStr? {
-    return CStr::from_bytes_with_nul(bytes, len);
+    if (len == 0usize) {
+        return null;
+    }
+    return CStr(bytes, len);
 }
 
 // Scans bytes up to the first NUL and returns a borrowed CStr on success.
 export def from_bytes_until_nul(bytes: *const c_char, len: usize) -> CStr? {
-    return CStr::from_bytes_until_nul(bytes, len);
+    if (len == 0usize) {
+        return null;
+    }
+    return CStr(bytes, len);
 }
 
 // Creates CStr without validating interior/trailing NUL constraints.
 export def from_bytes_with_nul_unchecked(bytes: *const c_char, len: usize) -> CStr {
-    return CStr::from_bytes_with_nul_unchecked(bytes, len);
+    return CStr(bytes, len);
 }
 
 // Returns the raw C pointer for FFI calls.

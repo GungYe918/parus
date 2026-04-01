@@ -1432,6 +1432,8 @@ namespace parus::oir {
                         return x.slot == slot;
                     } else if constexpr (std::is_same_v<T, InstFuncRef>) {
                         return false;
+                    } else if constexpr (std::is_same_v<T, InstSymbolRef>) {
+                        return false;
                     } else if constexpr (std::is_same_v<T, InstGlobalRef>) {
                         return false;
                     } else if constexpr (std::is_same_v<T, InstConstInt> ||

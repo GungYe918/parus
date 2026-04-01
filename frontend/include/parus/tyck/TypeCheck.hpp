@@ -493,6 +493,10 @@ namespace parus::tyck {
         bool type_contains_escape_(ty::TypeId t) const;
         bool is_storage_safe_owner_container_type_(ty::TypeId t) const;
         bool is_storage_safe_enum_payload_type_(ty::TypeId t) const;
+        std::pair<uint32_t, uint32_t> concrete_storage_size_align_(ty::TypeId t) const;
+        bool ensure_recoverable_payload_storage_meta_(ty::TypeId t, Span use_span);
+        bool type_declares_recoverable_marker_(ty::TypeId t, Span use_span, std::optional<ast::StmtId> recoverable_sid);
+        bool validate_recoverable_payload_envelope_(ty::TypeId t, Span sp, std::string_view headline);
         bool is_move_only_type_(ty::TypeId t) const;
         bool is_trivial_copy_clone_type_(ty::TypeId t) const;
         bool can_access_class_member_(ast::StmtId owner_class_sid, ast::FieldMember::Visibility visibility) const;

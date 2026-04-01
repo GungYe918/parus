@@ -954,6 +954,414 @@ namespace parus::tyck {
         }
     }
 
+    std::pair<uint32_t, uint32_t> TypeChecker::concrete_storage_size_align_(ty::TypeId tid) const {
+        using TK = ty::Kind;
+        using TB = ty::Builtin;
+
+        auto align_to_local_ = [](uint32_t value, uint32_t align) -> uint32_t {
+            if (align == 0 || align == 1) return value;
+            const uint32_t rem = value % align;
+            return (rem == 0) ? value : (value + (align - rem));
+        };
+
+        std::unordered_set<ty::TypeId> visiting{};
+        auto rec = [&](auto&& self, ty::TypeId cur) -> std::pair<uint32_t, uint32_t> {
+            cur = canonicalize_transparent_external_typedef_(cur);
+            if (cur == ty::kInvalidType || cur >= types_.count()) return {8u, 8u};
+            if (!visiting.insert(cur).second) return {8u, 8u};
+
+            const auto& tt = types_.get(cur);
+            switch (tt.kind) {
+                case TK::kError:
+                    return {8u, 8u};
+
+                case TK::kBuiltin:
+                    switch (tt.builtin) {
+                        case TB::kBool:
+                        case TB::kI8:
+                        case TB::kU8:
+                        case TB::kCChar:
+                        case TB::kCSChar:
+                        case TB::kCUChar:
+                            return {1u, 1u};
+                        case TB::kI16:
+                        case TB::kU16:
+                        case TB::kCShort:
+                        case TB::kCUShort:
+                            return {2u, 2u};
+                        case TB::kI32:
+                        case TB::kU32:
+                        case TB::kF32:
+                        case TB::kChar:
+                        case TB::kCInt:
+                        case TB::kCUInt:
+                        case TB::kCFloat:
+                            return {4u, 4u};
+                        case TB::kText:
+                            return {16u, 8u};
+                        case TB::kI128:
+                        case TB::kU128:
+                        case TB::kF128:
+                            return {16u, 16u};
+                        case TB::kUnit:
+                        case TB::kCVoid:
+                            return {1u, 1u};
+                        case TB::kCLong:
+                        case TB::kCULong:
+                            return {static_cast<uint32_t>(sizeof(long)), static_cast<uint32_t>(alignof(long))};
+                        case TB::kCLongLong:
+                        case TB::kCULongLong:
+                        case TB::kCDouble:
+                            return {8u, 8u};
+                        case TB::kCSize:
+                        case TB::kCSSize:
+                        case TB::kCPtrDiff:
+                        case TB::kVaList:
+                            return {8u, 8u};
+                        default:
+                            return {8u, 8u};
+                    }
+
+                case TK::kPtr:
+                case TK::kBorrow:
+                case TK::kEscape:
+                case TK::kFn:
+                    return {8u, 8u};
+
+                case TK::kOptional: {
+                    const auto [elem_size, elem_align] = self(self, tt.elem);
+                    const uint32_t a = std::max<uint32_t>(1u, elem_align);
+                    const uint32_t body = align_to_local_(1u, a) + std::max<uint32_t>(1u, elem_size);
+                    return {body, a};
+                }
+
+                case TK::kArray: {
+                    const auto [elem_size, elem_align] = self(self, tt.elem);
+                    const uint32_t e = std::max<uint32_t>(1u, elem_size);
+                    const uint32_t a = std::max<uint32_t>(1u, elem_align);
+                    if (!tt.array_has_size) return {16u, 8u};
+                    return {e * std::max<uint32_t>(1u, tt.array_size), a};
+                }
+
+                case TK::kNamedUser:
+                    break;
+            }
+
+            if (actor_decl_by_type_.find(cur) != actor_decl_by_type_.end()) {
+                return {8u, 8u};
+            }
+
+            if (auto fit = field_abi_meta_by_type_.find(cur); fit != field_abi_meta_by_type_.end()) {
+                uint32_t offset = 0;
+                uint32_t struct_align = std::max<uint32_t>(1u, fit->second.align);
+                if (fit->second.sid != ast::k_invalid_stmt &&
+                    static_cast<size_t>(fit->second.sid) < ast_.stmts().size()) {
+                    const auto& owner = ast_.stmt(fit->second.sid);
+                    const uint64_t begin = owner.field_member_begin;
+                    const uint64_t end = begin + owner.field_member_count;
+                    if (begin <= ast_.field_members().size() && end <= ast_.field_members().size()) {
+                        for (uint32_t i = owner.field_member_begin; i < owner.field_member_begin + owner.field_member_count; ++i) {
+                            const auto& member = ast_.field_members()[i];
+                            const auto [member_size_raw, member_align_raw] = self(self, member.type);
+                            const uint32_t member_size = std::max<uint32_t>(1u, member_size_raw);
+                            const uint32_t member_align = std::max<uint32_t>(1u, member_align_raw);
+                            if (fit->second.layout == ast::FieldLayout::kC) {
+                                offset = align_to_local_(offset, member_align);
+                            }
+                            offset += member_size;
+                            struct_align = std::max(struct_align, member_align);
+                        }
+                    }
+                }
+                const uint32_t size =
+                    (fit->second.layout == ast::FieldLayout::kC)
+                        ? std::max<uint32_t>(1u, align_to_local_(offset, struct_align))
+                        : std::max<uint32_t>(1u, offset);
+                return {size, std::max<uint32_t>(1u, struct_align)};
+            }
+
+            if (auto eit = enum_abi_meta_by_type_.find(cur); eit != enum_abi_meta_by_type_.end()) {
+                if (eit->second.is_layout_c) {
+                    return {4u, 4u};
+                }
+                uint32_t offset = 0;
+                uint32_t struct_align = 4u;
+                offset += 4u; // __tag : i32
+                for (const auto& variant : eit->second.variants) {
+                    for (const auto& field : variant.fields) {
+                        const auto [field_size_raw, field_align_raw] = self(self, field.type);
+                        const uint32_t field_size = std::max<uint32_t>(1u, field_size_raw);
+                        const uint32_t field_align = std::max<uint32_t>(1u, field_align_raw);
+                        if (eit->second.layout == ast::FieldLayout::kC) {
+                            offset = align_to_local_(offset, field_align);
+                        }
+                        offset += field_size;
+                        struct_align = std::max(struct_align, field_align);
+                    }
+                }
+                const uint32_t size =
+                    (eit->second.layout == ast::FieldLayout::kC)
+                        ? std::max<uint32_t>(1u, align_to_local_(offset, struct_align))
+                        : std::max<uint32_t>(1u, offset);
+                return {size, std::max<uint32_t>(1u, struct_align)};
+            }
+
+            return {8u, 8u};
+        };
+
+        return rec(rec, tid);
+    }
+
+    bool TypeChecker::validate_recoverable_payload_envelope_(ty::TypeId t, Span sp, std::string_view headline) {
+        const auto [payload_size, payload_align] = concrete_storage_size_align_(t);
+        if (payload_size <= 64u && payload_align <= 16u) {
+            return true;
+        }
+
+        result_.ok = false;
+        if (!diag_bag_) return false;
+
+        diag::Diagnostic d(
+            diag::Severity::kError,
+            diag::Code::kRecoverablePayloadExceedsExcCtxEnvelope,
+            sp
+        );
+        d.add_arg(std::to_string(payload_size));
+        d.add_arg(std::to_string(payload_align));
+        d.add_label(sp, headline);
+        d.add_note(
+            "recoverable payload '" + types_.to_string(t) +
+            "' has concrete storage size " + std::to_string(payload_size) +
+            " and align " + std::to_string(payload_align));
+        d.add_note("the fixed erased exc_ctx envelope is 64 bytes with align 16");
+        d.add_help("shrink the payload so it fits the recoverable exception envelope");
+        d.add_help("box manually at a higher layer if the payload must stay larger");
+        d.add_help("prefer a smaller Recoverable enum/struct value on the exception channel");
+        diag_bag_->add(std::move(d));
+        err_(sp, "recoverable payload exceeds fixed exception context envelope");
+        return false;
+    }
+
+    bool TypeChecker::ensure_recoverable_payload_storage_meta_(ty::TypeId t, Span use_span) {
+        if (t == ty::kInvalidType) return false;
+
+        auto has_storage_meta = [&](ty::TypeId candidate) -> bool {
+            return field_abi_meta_by_type_.find(candidate) != field_abi_meta_by_type_.end() ||
+                   enum_abi_meta_by_type_.find(candidate) != enum_abi_meta_by_type_.end();
+        };
+
+        auto copy_storage_meta = [&](ty::TypeId from, ty::TypeId to) {
+            if (from == ty::kInvalidType || to == ty::kInvalidType || from == to) return;
+            if (auto fit = field_abi_meta_by_type_.find(from); fit != field_abi_meta_by_type_.end()) {
+                field_abi_meta_by_type_[to] = fit->second;
+            }
+            if (auto eit = enum_abi_meta_by_type_.find(from); eit != enum_abi_meta_by_type_.end()) {
+                enum_abi_meta_by_type_[to] = eit->second;
+            }
+            if (auto dit = enum_decl_by_type_.find(from); dit != enum_decl_by_type_.end()) {
+                enum_decl_by_type_[to] = dit->second;
+            }
+        };
+
+        auto force_meta_for = [&](ty::TypeId candidate) {
+            if (candidate == ty::kInvalidType) return;
+
+            (void)ensure_generic_field_instance_from_type_(candidate, use_span);
+            if (has_storage_meta(candidate)) return;
+
+            if (auto enum_sid = ensure_generic_enum_instance_from_type_(candidate, use_span)) {
+                if (enum_abi_meta_by_type_.find(candidate) == enum_abi_meta_by_type_.end()) {
+                    check_stmt_enum_decl_(*enum_sid);
+                }
+            }
+
+            if (has_storage_meta(candidate)) return;
+
+            if (auto it = enum_decl_by_type_.find(candidate); it != enum_decl_by_type_.end()) {
+                check_stmt_enum_decl_(it->second);
+            }
+        };
+
+        const ty::TypeId canonical_t = canonicalize_transparent_external_typedef_(t);
+        force_meta_for(t);
+        if (!has_storage_meta(t) && canonical_t != t) {
+            force_meta_for(canonical_t);
+            copy_storage_meta(canonical_t, t);
+        }
+
+        std::optional<uint32_t> sym_sid = sym_.lookup(types_.to_string(t));
+        if (!sym_sid.has_value()) {
+            sym_sid = lookup_symbol_(types_.to_string(t));
+        }
+        if (sym_sid.has_value()) {
+            const auto& ss = sym_.symbol(*sym_sid);
+            if (ss.declared_type != ty::kInvalidType) {
+                force_meta_for(ss.declared_type);
+                copy_storage_meta(ss.declared_type, t);
+                copy_storage_meta(ss.declared_type, canonical_t);
+            }
+        }
+
+        if (!has_storage_meta(t) && canonical_t != t) {
+            copy_storage_meta(t, canonical_t);
+            copy_storage_meta(canonical_t, t);
+        }
+
+        return has_storage_meta(t) || has_storage_meta(canonical_t);
+    }
+
+    bool TypeChecker::type_declares_recoverable_marker_(
+        ty::TypeId t,
+        Span use_span,
+        std::optional<ast::StmtId> recoverable_sid
+    ) {
+        if (t == ty::kInvalidType) return false;
+        (void)ensure_recoverable_payload_storage_meta_(t, use_span);
+
+        auto qname_leaf = [](std::string_view qname) -> std::string_view {
+            const size_t split = qname.rfind("::");
+            return (split == std::string_view::npos) ? qname : qname.substr(split + 2);
+        };
+
+        auto matches_recoverable_name = [&](std::string_view proto_name) -> bool {
+            const std::string_view leaf = qname_leaf(proto_name);
+            if (leaf != "Recoverable") return false;
+            if (!recoverable_sid.has_value() ||
+                *recoverable_sid == ast::k_invalid_stmt ||
+                static_cast<size_t>(*recoverable_sid) >= ast_.stmts().size()) {
+                return true;
+            }
+
+            const ty::TypeId proto_type = types_.intern_ident(std::string(proto_name));
+            bool typed_path_failure = false;
+            if (auto sid = resolve_proto_decl_from_type_(proto_type, use_span, &typed_path_failure, false)) {
+                return proto_decl_matches_constraint_sid_(*sid, *recoverable_sid);
+            }
+
+            std::string_view expected_qname = ast_.stmt(*recoverable_sid).name;
+            if (auto it = proto_qualified_name_by_stmt_.find(*recoverable_sid); it != proto_qualified_name_by_stmt_.end()) {
+                expected_qname = it->second;
+            }
+            return qname_leaf(expected_qname) == leaf;
+        };
+
+        auto payload_unescape_value = [](std::string_view raw) -> std::string {
+            auto hex_value = [](char ch) -> int {
+                if (ch >= '0' && ch <= '9') return ch - '0';
+                if (ch >= 'a' && ch <= 'f') return 10 + (ch - 'a');
+                if (ch >= 'A' && ch <= 'F') return 10 + (ch - 'A');
+                return -1;
+            };
+
+            std::string out{};
+            out.reserve(raw.size());
+            for (size_t i = 0; i < raw.size(); ++i) {
+                if (raw[i] == '%' && i + 2 < raw.size()) {
+                    const int hi = hex_value(raw[i + 1]);
+                    const int lo = hex_value(raw[i + 2]);
+                    if (hi >= 0 && lo >= 0) {
+                        out.push_back(static_cast<char>((hi << 4) | lo));
+                        i += 2;
+                        continue;
+                    }
+                }
+                out.push_back(static_cast<char>(raw[i]));
+            }
+            return out;
+        };
+
+        auto payload_declares_recoverable = [&](std::string_view payload) -> bool {
+            size_t pos = 0;
+            while (pos < payload.size()) {
+                size_t next = payload.find('|', pos);
+                if (next == std::string_view::npos) next = payload.size();
+                const std::string_view part = payload.substr(pos, next - pos);
+                if (part.starts_with("impl_proto=")) {
+                    const std::string proto_name =
+                        payload_unescape_value(part.substr(std::string_view("impl_proto=").size()));
+                    if (matches_recoverable_name(proto_name)) {
+                        return true;
+                    }
+                }
+                if (next == payload.size()) break;
+                pos = next + 1;
+            }
+            return false;
+        };
+
+        auto owner_declares_recoverable = [&](ast::StmtId owner_sid) -> bool {
+            if (owner_sid == ast::k_invalid_stmt || static_cast<size_t>(owner_sid) >= ast_.stmts().size()) {
+                return false;
+            }
+            const auto& owner = ast_.stmt(owner_sid);
+            const auto& refs = ast_.path_refs();
+            const uint64_t begin = owner.decl_path_ref_begin;
+            const uint64_t end = begin + owner.decl_path_ref_count;
+            if (begin > refs.size() || end > refs.size()) return false;
+            for (uint32_t i = owner.decl_path_ref_begin; i < owner.decl_path_ref_begin + owner.decl_path_ref_count; ++i) {
+                const auto& pr = refs[i];
+                std::string proto_name = path_join_(pr.path_begin, pr.path_count);
+                if (proto_name.empty() && pr.type != ty::kInvalidType) {
+                    proto_name = types_.to_string(pr.type);
+                }
+                if (proto_name.empty()) continue;
+                if (matches_recoverable_name(proto_name)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        ast::StmtId owner_sid = ast::k_invalid_stmt;
+        if (auto it = enum_decl_by_type_.find(t); it != enum_decl_by_type_.end()) {
+            owner_sid = it->second;
+        } else if (auto it = field_abi_meta_by_type_.find(t); it != field_abi_meta_by_type_.end()) {
+            owner_sid = it->second.sid;
+        }
+        if (owner_declares_recoverable(owner_sid)) {
+            return true;
+        }
+
+        std::vector<std::string> lookup_keys{};
+        lookup_keys.push_back(types_.to_string(t));
+        if (auto rewritten = rewrite_imported_path_(lookup_keys.back())) {
+            lookup_keys.push_back(*rewritten);
+        }
+        const ty::TypeId canonical_t = canonicalize_transparent_external_typedef_(t);
+        if (canonical_t != t) {
+            lookup_keys.push_back(types_.to_string(canonical_t));
+            if (auto rewritten = rewrite_imported_path_(lookup_keys.back())) {
+                lookup_keys.push_back(*rewritten);
+            }
+        }
+
+        std::sort(lookup_keys.begin(), lookup_keys.end());
+        lookup_keys.erase(std::unique(lookup_keys.begin(), lookup_keys.end()), lookup_keys.end());
+
+        for (const auto& key : lookup_keys) {
+            if (key.empty()) continue;
+            auto sym_sid = sym_.lookup(key);
+            if (!sym_sid.has_value()) sym_sid = lookup_symbol_(key);
+            if (!sym_sid.has_value()) continue;
+            const auto& ss = sym_.symbol(*sym_sid);
+            if (!ss.external_payload.empty() && payload_declares_recoverable(ss.external_payload)) {
+                return true;
+            }
+            if (!ss.external_field_payload.empty() &&
+                payload_declares_recoverable(ss.external_field_payload)) {
+                return true;
+            }
+            if (ss.declared_type != ty::kInvalidType && ss.declared_type != t &&
+                ss.declared_type != canonical_t) {
+                if (type_declares_recoverable_marker_(ss.declared_type, use_span, recoverable_sid)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     void TypeChecker::check_stmt_throw_(const ast::Stmt& s) {
         if (!fn_ctx_.in_fn || !fn_ctx_.is_throwing) {
             diag_(diag::Code::kThrowOnlyInThrowingFn, s.span);
@@ -986,6 +1394,7 @@ namespace parus::tyck {
         allow_untyped_catch_binder_rethrow_use_ = old_allow_untyped_rethrow;
         (void)ensure_generic_field_instance_from_type_(payload_t, s.span);
         (void)ensure_generic_enum_instance_from_type_(payload_t, s.span);
+        (void)ensure_recoverable_payload_storage_meta_(payload_t, s.span);
 
         if (is_untyped_catch_rethrow) {
             fn_ctx_.has_exception_construct = true;
@@ -1037,38 +1446,20 @@ namespace parus::tyck {
             return std::nullopt;
         };
 
-        auto satisfies_recoverable = [&](ty::TypeId t, ast::StmtId recoverable_sid) -> bool {
-            ast::StmtId owner_sid = ast::k_invalid_stmt;
-            if (auto it = enum_decl_by_type_.find(t); it != enum_decl_by_type_.end()) {
-                owner_sid = it->second;
-            } else if (auto it = field_abi_meta_by_type_.find(t); it != field_abi_meta_by_type_.end()) {
-                owner_sid = it->second.sid;
-            }
-            if (owner_sid == ast::k_invalid_stmt || (size_t)owner_sid >= ast_.stmts().size()) {
-                return false;
-            }
-            const auto& owner = ast_.stmt(owner_sid);
-            const auto& refs = ast_.path_refs();
-            const uint64_t begin = owner.decl_path_ref_begin;
-            const uint64_t end = begin + owner.decl_path_ref_count;
-            if (begin > refs.size() || end > refs.size()) return false;
-            for (uint32_t i = owner.decl_path_ref_begin; i < owner.decl_path_ref_begin + owner.decl_path_ref_count; ++i) {
-                if (auto psid = resolve_proto_decl_from_path_ref_(refs[i], s.span)) {
-                    if (*psid == recoverable_sid) {
-                        return evaluate_proto_require_at_apply_(
-                            recoverable_sid, t, s.span,
-                            /*emit_unsatisfied_diag=*/false,
-                            /*emit_shape_diag=*/false);
-                    }
-                }
-            }
-            return false;
+        auto satisfies_recoverable = [&](ty::TypeId t, std::optional<ast::StmtId> recoverable_sid) -> bool {
+            return type_declares_recoverable_marker_(t, s.span, recoverable_sid);
         };
 
         const auto recoverable_sid = resolve_recoverable_proto();
-        if (!recoverable_sid.has_value() || !satisfies_recoverable(payload_t, *recoverable_sid)) {
+        if (!satisfies_recoverable(payload_t, recoverable_sid)) {
             diag_(diag::Code::kThrowPayloadMustBeRecoverable, s.span, types_.to_string(payload_t));
             err_(s.span, "throw payload must satisfy Recoverable proto");
+        } else {
+            (void)validate_recoverable_payload_envelope_(
+                payload_t,
+                s.span,
+                "recoverable payload must fit the fixed exception context envelope"
+            );
         }
 
         fn_ctx_.has_exception_construct = true;
@@ -1114,32 +1505,10 @@ namespace parus::tyck {
             return std::nullopt;
         };
 
-        auto satisfies_recoverable = [&](ty::TypeId t, ast::StmtId recoverable_sid, Span sp) -> bool {
-            ast::StmtId owner_sid = ast::k_invalid_stmt;
-            if (auto it = enum_decl_by_type_.find(t); it != enum_decl_by_type_.end()) {
-                owner_sid = it->second;
-            } else if (auto it = field_abi_meta_by_type_.find(t); it != field_abi_meta_by_type_.end()) {
-                owner_sid = it->second.sid;
-            }
-            if (owner_sid == ast::k_invalid_stmt || (size_t)owner_sid >= ast_.stmts().size()) {
-                return false;
-            }
-            const auto& owner = ast_.stmt(owner_sid);
-            const auto& refs = ast_.path_refs();
-            const uint64_t rb = owner.decl_path_ref_begin;
-            const uint64_t re = rb + owner.decl_path_ref_count;
-            if (rb > refs.size() || re > refs.size()) return false;
-            for (uint32_t i = owner.decl_path_ref_begin; i < owner.decl_path_ref_begin + owner.decl_path_ref_count; ++i) {
-                if (auto psid = resolve_proto_decl_from_path_ref_(refs[i], sp)) {
-                    if (*psid == recoverable_sid) {
-                        return evaluate_proto_require_at_apply_(
-                            recoverable_sid, t, sp,
-                            /*emit_unsatisfied_diag=*/false,
-                            /*emit_shape_diag=*/false);
-                    }
-                }
-            }
-            return false;
+        auto satisfies_recoverable = [&](ty::TypeId t,
+                                        std::optional<ast::StmtId> recoverable_sid,
+                                        Span sp) -> bool {
+            return type_declares_recoverable_marker_(t, sp, recoverable_sid);
         };
 
         const auto recoverable_sid = resolve_recoverable_proto();
@@ -1153,6 +1522,7 @@ namespace parus::tyck {
                 bind_t = cc.bind_type;
                 (void)ensure_generic_field_instance_from_type_(bind_t, cc.span);
                 (void)ensure_generic_enum_instance_from_type_(bind_t, cc.span);
+                (void)ensure_recoverable_payload_storage_meta_(bind_t, cc.span);
                 auto emit_payload_value_only_diag = [&](Span sp, ty::TypeId actual_t, std::string_view headline) {
                     result_.ok = false;
                     if (!diag_bag_) return;
@@ -1177,10 +1547,15 @@ namespace parus::tyck {
                                                  "typed catch binder must not contain owner-handle values");
                     err_(cc.span, "typed catch binder must not contain owner-handle values");
                     bind_t = types_.error();
-                } else if (!recoverable_sid.has_value() ||
-                           !satisfies_recoverable(bind_t, *recoverable_sid, cc.span)) {
+                } else if (!satisfies_recoverable(bind_t, recoverable_sid, cc.span)) {
                     diag_(diag::Code::kThrowPayloadMustBeRecoverable, cc.span, types_.to_string(bind_t));
                     err_(cc.span, "typed catch binder must satisfy Recoverable proto");
+                } else {
+                    (void)validate_recoverable_payload_envelope_(
+                        bind_t,
+                        cc.span,
+                        "typed catch binder must fit the fixed exception context envelope"
+                    );
                 }
             }
 

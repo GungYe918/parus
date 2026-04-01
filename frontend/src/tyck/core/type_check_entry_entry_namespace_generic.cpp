@@ -5729,9 +5729,97 @@ namespace parus::tyck {
                 }
             }
 
+            const uint32_t global_scope = sym_.global_scope();
+            if (stmt_resolved_symbol_cache_.size() < ast_.stmts().size()) {
+                stmt_resolved_symbol_cache_.resize(ast_.stmts().size(), sema::SymbolTable::kNoScope);
+            }
+            const auto& kids = ast_.stmt_children();
+            const uint64_t begin_members = class_stmt.stmt_begin;
+            const uint64_t end_members = begin_members + class_stmt.stmt_count;
+            if (begin_members <= kids.size() && end_members <= kids.size()) {
+                for (uint32_t i = class_stmt.stmt_begin; i < class_stmt.stmt_begin + class_stmt.stmt_count; ++i) {
+                    const ast::StmtId msid = kids[i];
+                    if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                    const auto& m = ast_.stmt(msid);
+                    class_member_owner_by_stmt_[msid] = templ.template_sid;
+                    if (m.kind == ast::StmtKind::kFnDecl) {
+                        if (m.fn_generic_param_count > 0) {
+                            generic_fn_template_sid_set_.insert(msid);
+                        }
+                        class_member_fn_sid_set_.insert(msid);
+
+                        std::string mqname = qname;
+                        if (!mqname.empty()) mqname += "::";
+                        mqname += std::string(m.name);
+                        fn_qualified_name_by_stmt_[msid] = mqname;
+                        if (m.member_visibility == ast::FieldMember::Visibility::kPrivate) {
+                            private_class_member_qname_owner_[mqname] = templ.template_sid;
+                        }
+                        fn_decl_by_name_[mqname].push_back(msid);
+                        if (!m.is_static && class_stmt.type != ty::kInvalidType) {
+                            class_effective_method_map_[class_stmt.type][std::string(m.name)].push_back(msid);
+                        }
+
+                        if (auto existing = sym_.lookup_in_scope(global_scope, mqname)) {
+                            if ((size_t)msid < stmt_resolved_symbol_cache_.size()) {
+                                stmt_resolved_symbol_cache_[msid] = *existing;
+                            }
+                            (void)sym_.update_declared_type(*existing, m.type);
+                        } else {
+                            auto ins = sym_.insert_into_scope(
+                                sema::SymbolKind::kFn,
+                                global_scope,
+                                mqname,
+                                m.type,
+                                m.span
+                            );
+                            if (ins.ok && (size_t)msid < stmt_resolved_symbol_cache_.size()) {
+                                stmt_resolved_symbol_cache_[msid] = ins.symbol_id;
+                            }
+                        }
+                    } else if (m.kind == ast::StmtKind::kVar && m.is_static) {
+                        std::string vqname = qname;
+                        if (!vqname.empty()) vqname += "::";
+                        vqname += std::string(m.name);
+                        if (m.member_visibility == ast::FieldMember::Visibility::kPrivate) {
+                            private_class_member_qname_owner_[vqname] = templ.template_sid;
+                        }
+                        const ty::TypeId vt = (m.type == ty::kInvalidType) ? types_.error() : m.type;
+                        uint32_t var_sym = sema::SymbolTable::kNoScope;
+                        if (auto existing = sym_.lookup_in_scope(global_scope, vqname)) {
+                            var_sym = *existing;
+                            (void)sym_.update_declared_type(*existing, vt);
+                        } else {
+                            auto ins = sym_.insert_into_scope(
+                                sema::SymbolKind::kVar,
+                                global_scope,
+                                vqname,
+                                vt,
+                                m.span
+                            );
+                            if (ins.ok) {
+                                var_sym = ins.symbol_id;
+                            }
+                        }
+                        if (var_sym != sema::SymbolTable::kNoScope &&
+                            (size_t)msid < stmt_resolved_symbol_cache_.size()) {
+                            stmt_resolved_symbol_cache_[msid] = var_sym;
+                        }
+                        if (m.is_const && var_sym != sema::SymbolTable::kNoScope) {
+                            const_symbol_decl_sid_[var_sym] = msid;
+                        }
+                    }
+                }
+            }
+
             const uint64_t begin = class_stmt.decl_constraint_begin;
             const uint64_t end = begin + class_stmt.decl_constraint_count;
             if (begin > ast_.fn_constraint_decls().size() || end > ast_.fn_constraint_decls().size()) {
+                if (generic_decl_checked_instances_.find(templ.template_sid) ==
+                        generic_decl_checked_instances_.end() &&
+                    pending_generic_decl_instance_enqueued_.insert(templ.template_sid).second) {
+                    pending_generic_decl_instance_queue_.push_back(templ.template_sid);
+                }
                 continue;
             }
             auto& constraints = ast_.fn_constraint_decls_mut();
@@ -5745,6 +5833,18 @@ namespace parus::tyck {
                         cc.rhs_type = proto_decl.type;
                     }
                 }
+            }
+
+            if (generic_decl_checked_instances_.find(templ.template_sid) ==
+                    generic_decl_checked_instances_.end() &&
+                pending_generic_decl_instance_enqueued_.insert(templ.template_sid).second) {
+                pending_generic_decl_instance_queue_.push_back(templ.template_sid);
+            }
+            if (class_stmt.decl_generic_param_count == 0 &&
+                std::find(generic_instantiated_class_sids_.begin(),
+                          generic_instantiated_class_sids_.end(),
+                          templ.template_sid) == generic_instantiated_class_sids_.end()) {
+                generic_instantiated_class_sids_.push_back(templ.template_sid);
             }
         }
     }

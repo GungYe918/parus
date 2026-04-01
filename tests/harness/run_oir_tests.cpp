@@ -1887,6 +1887,39 @@ namespace {
                        "exception lowering must not synthesize legacy __parus_exc_type global");
         ok &= require_(!has_legacy_exc_payload_global,
                        "exception lowering must not synthesize legacy typed payload globals");
+        const auto* exc_ctx_layout = [&]() -> const parus::oir::FieldLayoutDecl* {
+            for (const auto& fl : oir.mod.fields) {
+                if (fl.self_type == oir.mod.recoverable_exc_ctx_type) return &fl;
+            }
+            return nullptr;
+        }();
+        ok &= require_(exc_ctx_layout != nullptr,
+                       "exception lowering must materialize a field layout for the erased exc_ctx");
+        if (!ok) return false;
+        ok &= require_(exc_ctx_layout->align >= 16u,
+                       "erased exc_ctx layout must keep 16-byte alignment");
+        const auto find_member = [&](std::string_view name) -> const parus::oir::FieldMemberLayout* {
+            for (const auto& m : exc_ctx_layout->members) {
+                if (m.name == name) return &m;
+            }
+            return nullptr;
+        };
+        const auto* payload_member = find_member("__payload");
+        ok &= require_(find_member("__active") != nullptr,
+                       "erased exc_ctx layout must include __active");
+        ok &= require_(find_member("__type_token") != nullptr,
+                       "erased exc_ctx layout must include __type_token");
+        ok &= require_(find_member("__payload_size") != nullptr,
+                       "erased exc_ctx layout must include __payload_size");
+        ok &= require_(find_member("__drop_fn") != nullptr,
+                       "erased exc_ctx layout must include __drop_fn");
+        ok &= require_(payload_member != nullptr,
+                       "erased exc_ctx layout must include __payload envelope");
+        if (!ok) return false;
+        const auto& payload_ty = p.prog.types.get(payload_member->type);
+        ok &= require_(payload_ty.kind == parus::ty::Kind::kArray &&
+                           payload_ty.array_size == 64u,
+                       "erased exc_ctx payload envelope must be a fixed 64-byte array");
         if (!ok) return false;
 
         auto value_def_inst = [&](parus::oir::ValueId v) -> const parus::oir::Inst* {
@@ -1902,25 +1935,28 @@ namespace {
             const auto& fd = std::get<parus::oir::InstField>(di->data);
             return fd.field;
         };
-        auto slot_field_has_prefix = [&](parus::oir::ValueId slot, std::string_view name_prefix) -> bool {
-            const auto field = slot_field_name(slot);
-            return !field.empty() && field.find(name_prefix) == 0;
-        };
-
         bool has_payload_store = false;
         bool has_payload_load = false;
         bool has_dynamic_exc_type_load = false;
+        bool has_payload_size_store = false;
+        bool has_drop_fn_store = false;
 
         for (const auto& inst : oir.mod.insts) {
             if (const auto* st = std::get_if<parus::oir::InstStore>(&inst.data)) {
-                if (slot_field_has_prefix(st->slot, "__payload$")) {
+                if (slot_field_name(st->slot) == "__payload") {
                     has_payload_store = true;
                 }
+                if (slot_field_name(st->slot) == "__payload_size") {
+                    has_payload_size_store = true;
+                }
+                if (slot_field_name(st->slot) == "__drop_fn") {
+                    has_drop_fn_store = true;
+                }
             } else if (const auto* ld = std::get_if<parus::oir::InstLoad>(&inst.data)) {
-                if (slot_field_has_prefix(ld->slot, "__payload$")) {
+                if (slot_field_name(ld->slot) == "__payload") {
                     has_payload_load = true;
                 }
-                if (slot_field_name(ld->slot) == "__type") {
+                if (slot_field_name(ld->slot) == "__type_token") {
                     has_dynamic_exc_type_load = true;
                 }
             }
@@ -1928,8 +1964,12 @@ namespace {
 
         ok &= require_(has_payload_store, "throw payload must be stored in the recoverable exception context");
         ok &= require_(has_payload_load, "typed catch must load payload from the recoverable exception context");
+        ok &= require_(has_payload_size_store,
+                       "throw payload must store its concrete size in the erased exception context");
+        ok &= require_(has_drop_fn_store,
+                       "throw payload must store a drop thunk pointer in the erased exception context");
         ok &= require_(has_dynamic_exc_type_load,
-                       "untyped catch rethrow must read the dynamic exception type-id from exception context");
+                       "untyped catch rethrow must read the dynamic exception type token from exception context");
         return ok;
     }
 
@@ -1984,26 +2024,49 @@ namespace {
             if (ida == parus::oir::kInvalidId || ida >= oir.mod.insts.size()) return nullptr;
             return &oir.mod.insts[ida];
         };
-        auto slot_field_has_prefix = [&](parus::oir::ValueId slot, std::string_view name_prefix) -> bool {
+        auto slot_field_name = [&](parus::oir::ValueId slot) -> std::string_view {
             const auto* di = value_def_inst(slot);
-            if (di == nullptr) return false;
-            if (!std::holds_alternative<parus::oir::InstField>(di->data)) return false;
+            if (di == nullptr) return {};
+            if (!std::holds_alternative<parus::oir::InstField>(di->data)) return {};
             const auto& fd = std::get<parus::oir::InstField>(di->data);
-            return fd.field.find(name_prefix) == 0;
+            return fd.field;
         };
 
-        bool has_payload_drop = false;
+        bool has_drop_fn_load = false;
         for (const auto& inst : oir.mod.insts) {
-            if (const auto* dr = std::get_if<parus::oir::InstDrop>(&inst.data)) {
-                if (slot_field_has_prefix(dr->slot, "__payload$")) {
-                    has_payload_drop = true;
+            if (const auto* ld = std::get_if<parus::oir::InstLoad>(&inst.data)) {
+                if (slot_field_name(ld->slot) == "__drop_fn") {
+                    has_drop_fn_load = true;
                     break;
                 }
             }
         }
 
-        ok &= require_(has_payload_drop,
-                       "try expr discard path must drop the active recoverable payload exactly once");
+        ok &= require_(has_drop_fn_load,
+                       "try expr discard path must consult the stored drop thunk from the erased exception context");
+        return ok;
+    }
+
+    static bool test_recoverable_payload_envelope_diag_ok() {
+        const std::string src = R"(
+            proto Recoverable {};
+
+            struct Big: Recoverable {
+                data: i64[9];
+            }
+
+            def main?() -> i32 {
+                throw Big {
+                    data: [0i64, 1i64, 2i64, 3i64, 4i64, 5i64, 6i64, 7i64, 8i64],
+                };
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+
+        bool ok = true;
+        ok &= require_(p.prog.bag.has_code(parus::diag::Code::kRecoverablePayloadExceedsExcCtxEnvelope),
+                       "oversize recoverable payload must emit RecoverablePayloadExceedsExcCtxEnvelope");
         return ok;
     }
 
@@ -2046,6 +2109,7 @@ int main() {
         {"actor_handle_clone_release_lowering_ok", test_actor_handle_clone_release_lowering_ok},
         {"exception_payload_and_rethrow_lowering_ok", test_exception_payload_and_rethrow_lowering_ok},
         {"try_expr_exception_payload_cleanup_lowering_ok", test_try_expr_exception_payload_cleanup_lowering_ok},
+        {"recoverable_payload_envelope_diag_ok", test_recoverable_payload_envelope_diag_ok},
     };
 
     int failed = 0;

@@ -1420,6 +1420,15 @@ namespace parus::backend::aot {
                 const auto tid = value_type_id_(slot);
                 if (tid != parus::ty::kInvalidType) {
                     if (!require_storage_shape_(tid, "slot pointer materialization")) {
+                        const std::string cur_fallback = value_ty_(slot);
+                        if (is_aggregate_llvm_ty_(cur_fallback)) {
+                            const std::string tmp_slot = next_tmp_();
+                            const std::string src = vref_(slot);
+                            os << "  " << tmp_slot << " = alloca " << cur_fallback << "\n";
+                            os << "  store " << cur_fallback << " " << src << ", ptr " << tmp_slot << "\n";
+                            address_ref_by_value_[slot] = tmp_slot;
+                            return tmp_slot;
+                        }
                         return "null";
                     }
                     const std::string full_ty =
@@ -2647,6 +2656,18 @@ namespace parus::backend::aot {
                             } else {
                                 os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
                             }
+                        } else if constexpr (std::is_same_v<T, InstSymbolRef>) {
+                            if (inst.result == kInvalidId) return;
+                            if (!is_value_read_(inst.result)) return;
+                            const std::string sym = sanitize_symbol_(x.name);
+                            const auto rty = value_ty_(inst.result);
+                            if (rty == "ptr") {
+                                os << "  " << vref_(inst.result) << " = bitcast ptr @" << sym << " to ptr\n";
+                            } else if (is_int_ty_(rty)) {
+                                os << "  " << vref_(inst.result) << " = ptrtoint ptr @" << sym << " to " << rty << "\n";
+                            } else {
+                                os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
+                            }
                         } else if constexpr (std::is_same_v<T, InstGlobalRef>) {
                             if (inst.result == kInvalidId) return;
                             const std::string sym = sanitize_symbol_(x.name);
@@ -2824,8 +2845,21 @@ namespace parus::backend::aot {
                                 return sig.str();
                             };
 
+                            const bool is_null_indirect_callee =
+                                !direct.has_value() && is_const_null_value_(x.callee);
+                            const bool looks_like_internal_drop_thunk =
+                                !direct.has_value() &&
+                                x.args.size() == 1 &&
+                                arg_tys.size() == 1 &&
+                                arg_tys[0] == "ptr";
+
+                            if (is_null_indirect_callee && looks_like_internal_drop_thunk) {
+                                emit_default_result();
+                                return;
+                            }
+
                             if (!direct.has_value() &&
-                                (x.callee == kInvalidId || is_const_null_value_(x.callee))) {
+                                (x.callee == kInvalidId || is_null_indirect_callee)) {
                                 if (saw_invalid_callee_call_ != nullptr) {
                                     *saw_invalid_callee_call_ = true;
                                 }
@@ -3445,6 +3479,11 @@ namespace parus::backend::aot {
                 if (dr->owner_ty != parus::ty::kInvalidType) {
                     drop_roots.insert(dr->owner_ty);
                 }
+            }
+        }
+        for (const auto t : oir.recoverable_exc_payload_types) {
+            if (t != parus::ty::kInvalidType) {
+                drop_roots.insert(t);
             }
         }
 

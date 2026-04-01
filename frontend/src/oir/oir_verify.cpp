@@ -183,6 +183,12 @@ namespace parus::oir {
                         oss << "inst #" << iid << " has invalid function ref id f" << x.func;
                         push_error_(errs, oss.str());
                     }
+                } else if constexpr (std::is_same_v<T, InstSymbolRef>) {
+                    if (x.name.empty()) {
+                        std::ostringstream oss;
+                        oss << "inst #" << iid << " has empty symbol ref name";
+                        push_error_(errs, oss.str());
+                    }
                 } else if constexpr (std::is_same_v<T, InstGlobalRef>) {
                     if (x.global == kInvalidId || (size_t)x.global >= m.globals.size()) {
                         std::ostringstream oss;

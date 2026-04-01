@@ -125,6 +125,7 @@ namespace parus::oir {
     struct InstBinOp      { BinOp op; ValueId lhs; ValueId rhs; };
     struct InstCast       { CastKind kind; TypeId to; ValueId src; };
     struct InstFuncRef    { FuncId func = kInvalidId; std::string name; };
+    struct InstSymbolRef  { std::string name; };
     struct InstGlobalRef  { uint32_t global = kInvalidId; std::string name; };
     struct InstCall       {
         ValueId callee;
@@ -169,6 +170,7 @@ namespace parus::oir {
         InstBinOp,
         InstCast,
         InstFuncRef,
+        InstSymbolRef,
         InstGlobalRef,
         InstCall,
         InstActorCommit,

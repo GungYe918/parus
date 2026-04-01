@@ -3960,6 +3960,31 @@ namespace {
         return ok;
     }
 
+    static bool test_recoverable_payload_envelope_limit_diag() {
+        const std::string src = R"(
+            proto Recoverable {};
+
+            struct Big: Recoverable {
+                data: i64[9];
+            };
+
+            def main?() -> i32 {
+                throw Big {
+                    data: [0i64, 1i64, 2i64, 3i64, 4i64, 5i64, 6i64, 7i64, 8i64],
+                };
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(count_diag_code_(p.bag, parus::diag::Code::kRecoverablePayloadExceedsExcCtxEnvelope) == 1,
+            "oversize recoverable payload must emit RecoverablePayloadExceedsExcCtxEnvelope exactly once");
+        return ok;
+    }
+
     static bool test_generic_proto_target_arity_reports_once() {
         const std::string src = R"(
             proto Holder<T> {
@@ -4255,6 +4280,7 @@ int main() {
         {"try_expr_throwing_escape_call_returns_optional_owner", test_try_expr_throwing_escape_call_returns_optional_owner},
         {"untyped_catch_binder_is_rethrow_only", test_untyped_catch_binder_is_rethrow_only},
         {"throw_payload_rejects_nested_owner_handle", test_throw_payload_rejects_nested_owner_handle},
+        {"recoverable_payload_envelope_limit_diag", test_recoverable_payload_envelope_limit_diag},
         {"generic_proto_target_arity_reports_once", test_generic_proto_target_arity_reports_once},
         {"generic_proto_target_not_found_reports_once", test_generic_proto_target_not_found_reports_once},
         {"generic_type_eq_constraints_work", test_generic_type_eq_constraints_work},

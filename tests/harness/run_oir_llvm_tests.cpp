@@ -967,7 +967,7 @@ namespace {
         ok &= require_(has_line_with_tokens("@__parus_exc_root", "thread_local"),
                        "exception root context must lower as thread_local state");
         ok &= require_(lowered.llvm_ir.find("load i64, ptr %") != std::string::npos,
-                       "rethrow path must read existing exception type-id dynamically through exc_ctx");
+                       "rethrow path must read existing exception type token dynamically through exc_ctx");
         ok &= require_(lowered.llvm_ir.find(" invoke ") == std::string::npos,
                        "ordinary recoverable exceptions must not lower with invoke");
         ok &= require_(lowered.llvm_ir.find("landingpad") == std::string::npos,
