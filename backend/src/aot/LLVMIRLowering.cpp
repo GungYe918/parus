@@ -2708,6 +2708,10 @@ namespace parus::backend::aot {
 
                             const auto direct = resolve_direct_callee_(x);
                             std::vector<std::string> indirect_c_param_tys{};
+                            std::vector<std::string> indirect_parus_param_tys{};
+                            bool indirect_parus_has_exc_ctx = false;
+                            bool indirect_parus_returns_escape_slot = false;
+                            parus::ty::TypeId indirect_parus_ret_escape_elem_ty = parus::ty::kInvalidType;
                             auto collect_indirect_c_param_tys_ = [&]() -> bool {
                                 if (!x.call_is_c_abi) return false;
                                 auto callee_tid = value_type_id_(x.callee);
@@ -2738,7 +2742,33 @@ namespace parus::backend::aot {
                                 }
                                 return true;
                             };
+                            auto parus_fn_param_abi_ty_from_type_ = [&](parus::ty::TypeId tid) -> std::string {
+                                if (tid == parus::ty::kInvalidType) return "i64";
+                                const std::string full_ty = map_type_(
+                                    types_, tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
+                                if (is_aggregate_llvm_ty_(full_ty)) return "ptr";
+                                return full_ty;
+                            };
+                            auto collect_indirect_parus_param_tys_ = [&]() -> bool {
+                                if (x.call_is_c_abi || x.call_fn_type == parus::ty::kInvalidType) return false;
+                                if (x.call_fn_type >= types_.count()) return false;
+                                const auto& fn_tt = types_.get(x.call_fn_type);
+                                if (fn_tt.kind != parus::ty::Kind::kFn) return false;
+                                indirect_parus_param_tys.reserve(fn_tt.param_count + 2u);
+                                for (uint32_t i = 0; i < fn_tt.param_count; ++i) {
+                                    indirect_parus_param_tys.push_back(
+                                        parus_fn_param_abi_ty_from_type_(types_.fn_param_at(x.call_fn_type, i)));
+                                }
+                                indirect_parus_has_exc_ctx = x.call_is_throwing;
+                                if (indirect_parus_has_exc_ctx) {
+                                    indirect_parus_param_tys.push_back("ptr");
+                                }
+                                indirect_parus_returns_escape_slot = return_uses_escape_slot_(fn_tt.ret);
+                                indirect_parus_ret_escape_elem_ty = return_escape_elem_type_(fn_tt.ret);
+                                return true;
+                            };
                             const bool have_indirect_c_sig = !direct.has_value() && collect_indirect_c_param_tys_();
+                            const bool have_indirect_parus_sig = !direct.has_value() && collect_indirect_parus_param_tys_();
                             auto promote_c_variadic_abi_ty = [](const std::string& ty) -> std::string {
                                 if (ty == "half" || ty == "float") return "double";
                                 if (ty == "i1" || ty == "i8" || ty == "i16") return "i32";
@@ -2767,11 +2797,24 @@ namespace parus::backend::aot {
                                                ai >= static_cast<size_t>(x.call_c_fixed_param_count)) {
                                         want = promote_c_variadic_abi_ty(src_ty);
                                     }
+                                } else if (have_indirect_parus_sig) {
+                                    if (ai < indirect_parus_param_tys.size()) {
+                                        want = indirect_parus_param_tys[ai];
+                                        want_parus_indirect_aggregate =
+                                            want == "ptr" &&
+                                            logical_indirect_aggregate_ty_(x.args[ai]).has_value();
+                                    }
                                 }
                                 arg_tys.push_back(want);
                                 if (direct.has_value() &&
                                     ai < direct->param_is_exc_ctx.size() &&
                                     direct->param_is_exc_ctx[ai]) {
+                                    arg_vals.push_back(exc_ctx_arg_ptr_ref_(os, x.args[ai]));
+                                    continue;
+                                }
+                                if (have_indirect_parus_sig &&
+                                    indirect_parus_has_exc_ctx &&
+                                    ai == static_cast<size_t>(types_.get(x.call_fn_type).param_count)) {
                                     arg_vals.push_back(exc_ctx_arg_ptr_ref_(os, x.args[ai]));
                                     continue;
                                 }
@@ -2789,6 +2832,20 @@ namespace parus::backend::aot {
                                 const std::string ret_elem_ty = map_type_(
                                     types_,
                                     direct->ret_escape_elem_ty,
+                                    &named_layouts_,
+                                    &actor_types_,
+                                    &scalar_enum_types_
+                                );
+                                const std::string ret_slot = emit_zero_storage_slot_(os, ret_elem_ty);
+                                arg_tys.push_back("ptr");
+                                arg_vals.push_back(ret_slot);
+                                if (inst.result != kInvalidId) {
+                                    address_ref_by_value_[inst.result] = ret_slot;
+                                }
+                            } else if (have_indirect_parus_sig && indirect_parus_returns_escape_slot) {
+                                const std::string ret_elem_ty = map_type_(
+                                    types_,
+                                    indirect_parus_ret_escape_elem_ty,
                                     &named_layouts_,
                                     &actor_types_,
                                     &scalar_enum_types_
@@ -2973,6 +3030,21 @@ namespace parus::backend::aot {
                                     if (x.call_is_c_variadic) {
                                         if (!indirect_c_param_tys.empty()) sig << ", ";
                                         sig << "...";
+                                    }
+                                    sig << ")";
+                                    indirect_sig = sig.str();
+                                } else if (have_indirect_parus_sig) {
+                                    std::ostringstream sig;
+                                    const std::string indirect_ret_ty =
+                                        result_needs_aggregate_slot ? result_full_ty : result_ssa_ty;
+                                    sig << indirect_ret_ty << " (";
+                                    for (size_t i = 0; i < indirect_parus_param_tys.size(); ++i) {
+                                        if (i) sig << ", ";
+                                        sig << indirect_parus_param_tys[i];
+                                    }
+                                    if (indirect_parus_returns_escape_slot) {
+                                        if (!indirect_parus_param_tys.empty()) sig << ", ";
+                                        sig << "ptr";
                                     }
                                     sig << ")";
                                     indirect_sig = sig.str();

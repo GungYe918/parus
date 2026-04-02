@@ -109,7 +109,8 @@ namespace parus::cimport {
                         defaults.empty() ? nullptr : defaults.data(),
                         tt.fn_is_c_abi,
                         tt.fn_is_c_variadic,
-                        tt.fn_callconv
+                        tt.fn_callconv,
+                        tt.fn_is_throwing
                     );
                 }
             }
@@ -207,7 +208,8 @@ namespace parus::cimport {
                                             defaults.empty() ? nullptr : defaults.data(),
                                             sem_tt.fn_is_c_abi,
                                             sem_tt.fn_is_c_variadic,
-                                            sem_tt.fn_callconv
+                                            sem_tt.fn_callconv,
+                                            sem_tt.fn_is_throwing
                                         );
                                     }
                                     break;

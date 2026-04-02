@@ -113,6 +113,7 @@ namespace parus::ty {
         uint32_t positional_param_count = 0;
         uint32_t label_begin = 0;
         uint32_t default_begin = 0;
+        bool fn_is_throwing = false;
         bool fn_is_c_abi = false;
         bool fn_is_c_variadic = false;
         CCallConv fn_callconv = CCallConv::kDefault;

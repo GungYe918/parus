@@ -221,6 +221,7 @@ Recoverable ABI는 hidden `exc_ctx*`와 single thread-local root exception conte
 
 Recoverable payload는 `size <= 64` 및 `align <= 16`을 만족해야 하며, heap fallback은 없다.
 ordinary `?` 함수의 정상 경로는 caller-provided context 전달과 local check만 부담한다.
+same erased `exc_ctx*` ABI는 direct/imported-direct `?` 호출뿐 아니라 internal indirect Parus throwing lane에도 공통으로 적용된다.
 C ABI / `cimport` 호출은 Recoverable source가 아니며 hidden `exc_ctx*`를 받지 않는다.
 
 1. `extern "C"` 호출로 들어온 경계에서 언와인드가 외부로 전파되면 안 된다.
@@ -229,6 +230,7 @@ C ABI / `cimport` 호출은 Recoverable source가 아니며 hidden `exc_ctx*`를
 4. Recoverable(`throw`)는 ABI 경계에서 값으로 변환하거나 명시 반환 채널로 브리지해야 한다.
 5. `try expr`는 throwing Parus call에만 적용되며, `extern "C"` / `cimport` 호출에는 사용할 수 없다.
 6. ordinary Recoverable lowering은 `invoke`, `landingpad`, `resume`, personality 기반 EH를 사용하지 않는다.
+7. source-level throwing function type syntax, foreign unwind bridge, panic strategy flag는 후속 라운드 과제다.
 
 ### 8.1 C import TLS/Thread 경계 (고정)
 

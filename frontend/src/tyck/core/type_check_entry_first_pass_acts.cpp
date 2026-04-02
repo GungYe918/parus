@@ -2994,7 +2994,8 @@
                                 defaults.empty() ? nullptr : defaults.data(),
                                 tt.fn_is_c_abi,
                                 tt.fn_is_c_variadic,
-                                tt.fn_callconv
+                                tt.fn_callconv,
+                                tt.fn_is_throwing
                             );
                         }
                         default:
@@ -4123,7 +4124,8 @@
                             defaults.empty() ? nullptr : defaults.data(),
                             tt.fn_is_c_abi,
                             tt.fn_is_c_variadic,
-                            tt.fn_callconv
+                            tt.fn_callconv,
+                            tt.fn_is_throwing
                         );
                     }
                     default:
@@ -4317,7 +4319,8 @@
                         defaults.empty() ? nullptr : defaults.data(),
                         tt.fn_is_c_abi,
                         tt.fn_is_c_variadic,
-                        tt.fn_callconv
+                        tt.fn_callconv,
+                        tt.fn_is_throwing
                     );
                 }
                 default:

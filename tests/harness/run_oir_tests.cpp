@@ -2070,6 +2070,131 @@ namespace {
         return ok;
     }
 
+    static bool test_indirect_throwing_call_metadata_lowering_ok() {
+        const std::string src = R"(
+            proto Recoverable {};
+
+            struct Err: Recoverable {
+                code: i32;
+            }
+
+            def leaf?() -> i32 {
+                throw Err { code: 7i32 };
+            }
+
+            def via?() -> i32 {
+                set f = leaf;
+                return f();
+            }
+
+            def main() -> i32 {
+                let v: i32? = try via();
+                return v ?? -1i32;
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "indirect throwing metadata source must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "indirect throwing metadata source must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "indirect throwing metadata source must pass SIR capability");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for indirect throwing metadata source");
+        if (!ok) return false;
+
+        bool found_indirect_throwing_call = false;
+        for (const auto& inst : oir.mod.insts) {
+            const auto* call = std::get_if<parus::oir::InstCall>(&inst.data);
+            if (call == nullptr) continue;
+            if (call->direct_callee != parus::oir::kInvalidId) continue;
+            if (!call->call_is_throwing || call->call_is_c_abi) continue;
+            if (call->call_fn_type == parus::oir::kInvalidId) continue;
+            if (!p.prog.types.is_fn(call->call_fn_type)) continue;
+            if (!p.prog.types.fn_is_throwing(call->call_fn_type)) continue;
+            found_indirect_throwing_call = true;
+            break;
+        }
+
+        ok &= require_(found_indirect_throwing_call,
+                       "indirect Parus throwing call must carry fn_type metadata and call_is_throwing in OIR");
+        return ok;
+    }
+
+    static bool test_indirect_throwing_escape_call_metadata_lowering_ok() {
+        const std::string src = R"(
+            proto Recoverable {};
+
+            struct Err: Recoverable {
+                code: i32;
+            }
+
+            class Worker {
+                value: i32;
+
+                init(v: i32) {
+                    self.value = v;
+                }
+            }
+
+            def load?(ok: bool) -> ~Worker {
+                if (ok) {
+                    set w = Worker(9i32);
+                    return ~w;
+                }
+                throw Err { code: 1i32 };
+            }
+
+            def via?(ok: bool) -> ~Worker {
+                set f = load;
+                return f(ok);
+            }
+
+            def main() -> i32 {
+                let h: (~Worker)? = try via(false);
+                if (h == null) {
+                    return 0i32;
+                }
+                return 1i32;
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "indirect throwing escape metadata source must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "indirect throwing escape metadata source must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "indirect throwing escape metadata source must pass SIR capability");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for indirect throwing escape metadata source");
+        if (!ok) return false;
+
+        bool found_indirect_throwing_escape_call = false;
+        for (const auto& inst : oir.mod.insts) {
+            const auto* call = std::get_if<parus::oir::InstCall>(&inst.data);
+            if (call == nullptr) continue;
+            if (call->direct_callee != parus::oir::kInvalidId) continue;
+            if (!call->call_is_throwing || call->call_is_c_abi) continue;
+            if (call->call_fn_type == parus::oir::kInvalidId) continue;
+            if (!p.prog.types.is_fn(call->call_fn_type)) continue;
+            const auto ret_ty = p.prog.types.get(call->call_fn_type).ret;
+            if (ret_ty == parus::ty::kInvalidType ||
+                p.prog.types.get(ret_ty).kind != parus::ty::Kind::kEscape) {
+                continue;
+            }
+            found_indirect_throwing_escape_call = true;
+            break;
+        }
+
+        ok &= require_(found_indirect_throwing_escape_call,
+                       "indirect Parus throwing ~ return call must preserve throwing fn metadata in OIR");
+        return ok;
+    }
+
 } // namespace
 
 int main() {
@@ -2110,6 +2235,8 @@ int main() {
         {"exception_payload_and_rethrow_lowering_ok", test_exception_payload_and_rethrow_lowering_ok},
         {"try_expr_exception_payload_cleanup_lowering_ok", test_try_expr_exception_payload_cleanup_lowering_ok},
         {"recoverable_payload_envelope_diag_ok", test_recoverable_payload_envelope_diag_ok},
+        {"indirect_throwing_call_metadata_lowering_ok", test_indirect_throwing_call_metadata_lowering_ok},
+        {"indirect_throwing_escape_call_metadata_lowering_ok", test_indirect_throwing_escape_call_metadata_lowering_ok},
     };
 
     int failed = 0;

@@ -571,8 +571,14 @@ namespace parus::sir::detail {
                     use_external_callee = (external_callee_sym != sema::SymbolTable::kNoScope &&
                                            external_callee_sym != k_invalid_symbol);
                 }
-                if ((size_t)eid < tyck.expr_external_callee_type.size()) {
+                if ((size_t)eid < tyck.expr_call_fn_type.size() &&
+                    tyck.expr_call_fn_type[eid] != parus::ty::kInvalidType) {
+                    v.callee_fn_type = tyck.expr_call_fn_type[eid];
+                } else if ((size_t)eid < tyck.expr_external_callee_type.size()) {
                     v.callee_fn_type = tyck.expr_external_callee_type[eid];
+                }
+                if ((size_t)eid < tyck.expr_call_is_throwing.size()) {
+                    v.call_is_throwing = tyck.expr_call_is_throwing[eid] != 0u;
                 }
                 if ((size_t)eid < tyck.expr_external_receiver_expr.size()) {
                     external_receiver_eid = tyck.expr_external_receiver_expr[eid];

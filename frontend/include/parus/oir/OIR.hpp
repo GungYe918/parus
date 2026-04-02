@@ -133,6 +133,8 @@ namespace parus::oir {
         // 오버로드/정적 해소된 direct callee를 ID로 고정한다.
         // kInvalidId면 기존 callee 값 기반(함수 값/간접 호출) 경로를 사용한다.
         FuncId direct_callee = kInvalidId;
+        TypeId call_fn_type = kInvalidId;
+        bool call_is_throwing = false;
         bool call_is_c_abi = false;
         bool call_is_c_variadic = false;
         CCallConv call_c_callconv = CCallConv::Default;

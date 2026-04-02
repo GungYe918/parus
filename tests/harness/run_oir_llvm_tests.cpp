@@ -1033,6 +1033,122 @@ namespace {
         return emit_object_for_test_case_(lowered.llvm_ir, "c_abi_exception_boundary_non_throwing_patterns");
     }
 
+    static bool test_indirect_throwing_call_llvm_patterns_() {
+        const std::string src = R"(
+            proto Recoverable {};
+
+            struct Err: Recoverable {
+                code: i32;
+            }
+
+            def leaf?() -> i32 {
+                throw Err { code: 7i32 };
+            }
+
+            def via?() -> i32 {
+                set f = leaf;
+                return f();
+            }
+
+            def main() -> i32 {
+                let v: i32? = try via();
+                return v ?? -1i32;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "indirect throwing LLVM case must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+
+        ok &= require_(lowered.ok, "LLVM text lowering for indirect throwing case must succeed");
+        const bool has_indirect_throw_call =
+            lowered.llvm_ir.find("call i32 (ptr) %") != std::string::npos;
+        const bool has_direct_throw_call =
+            lowered.llvm_ir.find("call i32 @p$main$_$leaf$") != std::string::npos &&
+            lowered.llvm_ir.find("(ptr %arg0)") != std::string::npos;
+        ok &= require_(has_indirect_throw_call || has_direct_throw_call,
+                       "function-item throwing call must use the Parus throwing ABI with erased exc_ctx");
+        ok &= require_(lowered.llvm_ir.find(" invoke ") == std::string::npos,
+                       "indirect throwing call must not lower with invoke");
+        ok &= require_(lowered.llvm_ir.find("landingpad") == std::string::npos,
+                       "indirect throwing call must not lower with landingpad");
+        if (!ok) return false;
+        return emit_object_for_test_case_(lowered.llvm_ir, "indirect_throwing_call_patterns");
+    }
+
+    static bool test_indirect_throwing_escape_call_llvm_patterns_() {
+        const std::string src = R"(
+            proto Recoverable {};
+
+            struct Err: Recoverable {
+                code: i32;
+            }
+
+            class Worker {
+                value: i32;
+
+                init(v: i32) {
+                    self.value = v;
+                }
+            }
+
+            def load?(ok: bool) -> ~Worker {
+                if (ok) {
+                    set w = Worker(9i32);
+                    return ~w;
+                }
+                throw Err { code: 1i32 };
+            }
+
+            def via?(ok: bool) -> ~Worker {
+                set f = load;
+                return f(ok);
+            }
+
+            def main() -> i32 {
+                let h: (~Worker)? = try via(false);
+                if (h == null) {
+                    return 0i32;
+                }
+                return 1i32;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "indirect throwing escape LLVM case must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+
+        ok &= require_(lowered.ok, "LLVM text lowering for indirect throwing escape case must succeed");
+        const bool has_indirect_throwing_escape_call =
+            lowered.llvm_ir.find("call ptr (i1, ptr, ptr) %") != std::string::npos;
+        const bool has_direct_throwing_escape_call =
+            lowered.llvm_ir.find("call ptr @p$main$_$load$") != std::string::npos &&
+            lowered.llvm_ir.find("(i1 %") != std::string::npos &&
+            lowered.llvm_ir.find(", ptr %arg1, ptr %tmp0)") != std::string::npos;
+        ok &= require_(has_indirect_throwing_escape_call || has_direct_throwing_escape_call,
+                       "function-item ?->~ call must use visible args plus exc_ctx and hidden return slot");
+        ok &= require_(lowered.llvm_ir.find(" invoke ") == std::string::npos,
+                       "indirect throwing escape call must not lower with invoke");
+        ok &= require_(lowered.llvm_ir.find("landingpad") == std::string::npos,
+                       "indirect throwing escape call must not lower with landingpad");
+        if (!ok) return false;
+        return emit_object_for_test_case_(lowered.llvm_ir, "indirect_throwing_escape_call_patterns");
+    }
+
     /// @brief nest 경로 함수가 namespace 포함 맹글 심볼로 내려가고 direct call되는지 검사한다.
     static bool test_nest_path_mangling_and_direct_call_() {
         const std::string src = R"(
@@ -2407,11 +2523,13 @@ namespace {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     struct Case {
         const char* name;
         bool (*def)();
     };
+
+    const std::string_view filter = (argc >= 2 && argv[1] != nullptr) ? std::string_view(argv[1]) : std::string_view{};
 
     const Case cases[] = {
         {"source_index_lowering_uses_gep", test_source_index_lowering_uses_gep},
@@ -2428,6 +2546,8 @@ int main() {
         {"copy_clone_operator_and_builtin_lowering_patterns", test_copy_clone_operator_and_builtin_lowering_patterns_},
         {"exception_payload_and_rethrow_llvm_patterns", test_exception_payload_and_rethrow_llvm_patterns_},
         {"c_abi_exception_boundary_stays_non_throwing_llvm_patterns", test_c_abi_exception_boundary_stays_non_throwing_llvm_patterns_},
+        {"indirect_throwing_call_llvm_patterns", test_indirect_throwing_call_llvm_patterns_},
+        {"indirect_throwing_escape_call_llvm_patterns", test_indirect_throwing_escape_call_llvm_patterns_},
         {"nest_path_mangling_and_direct_call", test_nest_path_mangling_and_direct_call_},
         {"import_alias_path_resolution_to_llvm", test_import_alias_path_resolution_to_llvm_},
         {"switch_stmt_lowering_cfg", test_switch_stmt_lowering_cfg_},
@@ -2462,6 +2582,7 @@ int main() {
 
     int failed = 0;
     for (const auto& tc : cases) {
+        if (!filter.empty() && filter != tc.name) continue;
         std::cout << "[TEST] " << tc.name << "\n";
         const bool ok = tc.def();
         if (!ok) {

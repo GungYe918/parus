@@ -1,6 +1,6 @@
 # Parus gOIR Opcode Model
 
-문서 버전: `draft-0.2`  
+문서 버전: `draft-0.3`  
 상태: `Design Freeze (TODO Track)`
 
 이 문서는 `gOIR`의 실제 표현 계층과 opcode 초안을 고정한다.
@@ -14,14 +14,15 @@ placed 단계에서 family-specific opcode와 `bridgeOIR`로 materialize된다.
 2. `gOIR-open`은 computation, realization set, semantic invoke를 보존한다.
 3. `gOIR-placed`는 selected realization, family-specific call, explicit bridge를 가진다.
 4. `coreOIR`, `cpuOIR`, `gpuOIR`, `bridgeOIR`는 기본적으로 SSA + block parameter 모델을 사용한다.
-5. `hwOIR`는 hierarchical graph 중심이지만 저장 표현은 동일한 `region/op/value` 틀을 재사용한다.
-6. `phi`는 도입하지 않고 block parameter로 통일한다.
-7. 함수 인자는 별도 opcode로 두지 않고 entry block parameter로 모델링한다.
-8. open 단계에서 cross-family 의미 연결은 direct family call로 표현하지 않는다.
-9. placed 단계에서 cross-family 이동은 반드시 explicit bridge를 통해 일어난다.
-10. 일반 side-effect는 block 순서와 effect metadata로 모델링한다.
-11. async/synchronization 경계는 explicit `token/event` 값으로 모델링한다.
-12. structured control op는 child region을 가진다.
+5. `hw.struct`와 `hw.flow`는 hardware lane의 두 개의 정식 family다.
+6. `hw.struct`는 structural 중심, `hw.flow`는 spatial/dataflow 중심의 portable lane이다.
+7. `phi`는 도입하지 않고 block parameter로 통일한다.
+8. 함수 인자는 별도 opcode로 두지 않고 entry block parameter로 모델링한다.
+9. open 단계에서 cross-family 의미 연결은 direct family call로 표현하지 않는다.
+10. placed 단계에서 cross-family 이동은 반드시 explicit bridge를 통해 일어난다.
+11. 일반 side-effect는 block 순서와 effect metadata로 모델링한다.
+12. async/synchronization 경계는 explicit `token/event` 값으로 모델링한다.
+13. structured control op는 child region을 가진다.
 
 ## 2. 공통 타입 계열
 
@@ -57,8 +58,9 @@ placed 단계에서 family-specific opcode와 `bridgeOIR`로 materialize된다.
 12. `hw.clock`
 13. `hw.reset`
 14. `hw.channel<T, protocol>`
-15. `bridge.event`
-16. `bridge.template`
+15. `hw.window<T, rank>`
+16. `bridge.event`
+17. `bridge.template`
 
 ### 2.4 semantic/placement support type
 
@@ -79,8 +81,8 @@ placed 단계에서 family-specific opcode와 `bridgeOIR`로 materialize된다.
 
 1. `gOIR-open`은 semantic invoke를 유지한다.
 2. semantic invoke는 computation symbol, optional placement policy override, service mediation intent를 참조할 수 있다.
-3. `gOIR-open`의 semantic invoke는 아직 `cpu/gpu/hw` direct call로 고정되지 않는다.
-4. `gOIR-placed`에서 semantic invoke는 `CallPure`, `CallHost`, `CallDevice`, `bridge.*` 중 하나 또는 그 조합으로 materialize된다.
+3. `gOIR-open`의 semantic invoke는 아직 `cpu/gpu/hw.struct/hw.flow` direct call로 고정되지 않는다.
+4. `gOIR-placed`에서 semantic invoke는 `CallPure`, `CallHost`, `CallDevice`, hardware family-local invoke form, `bridge.*` 중 하나 또는 그 조합으로 materialize된다.
 5. service-style interop는 open 단계에서 semantic request로 표현하고, placed 단계에서 `bridge.service_req`/`bridge.service_reply`로 concretize한다.
 
 ### 3.3 structured op
@@ -89,19 +91,21 @@ placed 단계에서 family-specific opcode와 `bridgeOIR`로 materialize된다.
 
 1. `cpu.for`, `cpu.if`, `cpu.reduce`
 2. `gpu.kernel`
-3. `hw.module`, `hw.comb`, `hw.seq`, `hw.when`
-4. `bridge.launch_gpu`, `bridge.invoke_hw`, `bridge.service_req`의 callback-style completion region
+3. `hw.struct.module`, `hw.struct.comb`, `hw.struct.seq`
+4. `hw.flow.pipeline`, `hw.flow.stage`, `hw.flow.task`
+5. `bridge.launch_gpu`, `bridge.invoke_hw`, `bridge.service_req`의 callback-style completion region
 
 ### 3.4 textual dump 형태
 
 권장 dump 표기는 아래 스타일을 따른다.
 
 ```text
-%out = exec.invoke @matmul(%a, %b, %c) policy(@auto_tile) : tuple<gpu, hw, cpu>
+%out = exec.invoke @matmul(%a, %b, %c) policy(@auto_tile) : tuple<gpu, hw.flow, cpu>
 %3 = core.addi %1, %2 : i32
 %7 = cpu.for %lb, %ub, %step iter(%acc = %init) -> i32 { ... }
 %tid = gpu.global_id.x : index
-%r1 = hw.reg %next clk %clk rst %rst init %zero : hw.uint<32>
+%m = hw.struct.module @accel { ... }
+%p = hw.flow.pipeline iter(%tok = %in) -> hw.channel<i32, ready_valid> { ... }
 %tok1 = bridge.launch_gpu @matmul.gpu(%bufA, %bufB, %bufC) grid(%gx, %gy, %gz) block(%bx, %by, %bz)
 ```
 
@@ -406,34 +410,30 @@ enum class GpuOpcode : uint16_t {
 4. `Barrier*`는 workgroup legality를 검사한다.
 5. `Framebuffer*` op는 graphics-capable target profile에서만 허용한다.
 
-## 7. hwOIR
+## 7. hw.struct
 
-`hwOIR`는 placed-stage HW realization family다.
-이 family는 static RTL-only가 아니라 structural, flow, service, template 성격을 함께 수용해야 한다.
-현재 opcode 집합은 placed-stage structural core를 우선 제시하고, flow/service/template 확장은 후속 단계에서 구체화한다.
+`hw.struct`는 placed-stage structural hardware family다.
+이 family는 기존 structural HW IR과 가장 자연스럽게 연결되는 portable lane이다.
 
-### 7.1 hw 표현 범위
+### 7.1 hw.struct 표현 범위
 
 1. hardware module hierarchy
 2. combinational dataflow
 3. sequential state
 4. memory macro
-5. handshake/channel
-6. pipeline/stage
-7. task/dataflow style flow 표현
-8. service endpoint와 template-oriented specialization hook
+5. instance-based composition
 
-### 7.2 hw placement/service 영향
+### 7.2 hw.struct placement 영향
 
-1. open 단계에서는 HW를 direct invoke 대상으로 고정하지 않고 candidate realization과 template/service capability로만 유지한다.
-2. placed 단계에서 `bridge.invoke_hw`, `bridge.configure_hw_template`, `bridge.service_req`가 HW realization과 연결된다.
-3. HW가 host와 협력할 때 direct host call보다 service endpoint와 explicit bridge를 우선한다.
-4. 아래 opcode 집합은 placed-stage structural baseline이며, flow/service/template 구체 op는 future refinement 대상으로 남긴다.
+1. open 단계에서는 structural hardware 자체로 고정하지 않고 candidate realization으로만 유지한다.
+2. placed 단계에서 structural path가 선택되면 `bridge.invoke_hw` 또는 structural export lane과 연결된다.
+3. `hw.struct`는 CIRCT/Verilog/legacy FPGA/ASIC flow의 기준점이다.
+4. capsule, warm/cold activation, context bank 같은 PMF-specific 개념은 이 family에 올리지 않는다.
 
-### 7.3 hw opcode
+### 7.3 hw.struct opcode
 
 ```cpp
-enum class HwOpcode : uint16_t {
+enum class HwStructOpcode : uint16_t {
     Module, InputPort, OutputPort, InoutPort, Output,
     Instance,
     ConstBits,
@@ -445,27 +445,79 @@ enum class HwOpcode : uint16_t {
     Wire, Assign,
     Reg, RegNext,
     CombRegion, SeqRegion, When, Case,
-    Mem, MemRead, MemWrite,
-    ChanSend, ChanRecv, FIFO,
-    Pipeline, Stage
+    Mem, MemRead, MemWrite
 };
 ```
 
-### 7.4 hw 구조 규칙
+### 7.4 hw.struct 구조 규칙
 
 1. `Module`은 child region으로 본문을 가진다.
 2. `CombRegion`은 side-effect 없는 조합 논리만 허용한다.
 3. `SeqRegion`은 `clock/reset`이 명시된 상태 op만 허용한다.
 4. `Reg`와 `RegNext`는 분리해, current-state와 next-state 연결을 명확히 한다.
-5. `ChanSend/ChanRecv`는 handshake protocol attr를 가져야 한다.
-6. service endpoint와 template parameterization은 후속 opcode refinement 전까지 realization metadata와 bridge contract로 보조 표현한다.
+5. structural lane은 portable structural semantics를 유지해야 하며 backend-specific activation semantics를 담지 않는다.
 
-## 8. bridgeOIR
+## 8. hw.flow
+
+`hw.flow`는 placed-stage portable spatial/dataflow hardware family다.
+이 family는 PMF 전용 IR가 아니며, FPGA overlay나 future spatial backend도 받을 수 있는 공통 lane이다.
+
+### 8.1 hw.flow 표현 범위
+
+1. stream/channel handshake
+2. pipeline/stage
+3. task/dataflow control
+4. window/buffer residency-friendly flow
+5. service endpoint cooperation
+6. spatial locality와 steady-state throughput을 오래 보존하는 flow
+
+### 8.2 hw.flow placement 영향
+
+1. open 단계에서는 `hw.flow`를 direct backend target으로 고정하지 않는다.
+2. placed 단계에서 `hw.flow` realization은 overlay backend, CGRA-like backend, PMF backend 중 하나로 내려갈 수 있다.
+3. `hw.flow`는 PMF-specific activation semantics를 직접 표현하지 않는다.
+4. PMF-specific lowering은 `hw.flow -> PMF backend -> pmfIR/capsule`에서만 등장한다.
+
+### 8.3 hw.flow representative op class
+
+`hw.flow`는 이번 단계에서 full opcode freeze까지는 가지 않는다.
+대신 canonical 표현 범위와 representative op class를 아래처럼 고정한다.
+
+1. `Task`
+   - flow task 또는 dataflow kernel 경계
+2. `Pipeline`
+   - steady-state pipeline region
+3. `Stage`
+   - pipeline stage boundary
+4. `ChannelSend`
+   - channel/stream write
+5. `ChannelRecv`
+   - channel/stream read
+6. `WindowSubView`
+   - buffer/window residency-friendly local view
+7. `WindowBind`
+   - flow-local window binding
+8. `ServiceEndpoint`
+   - service cooperation 경계
+9. `ServiceCall`
+   - service endpoint 요청
+10. `FlowYield`
+   - structured flow region terminator
+
+### 8.4 hw.flow 규칙
+
+1. channel/stream은 handshake protocol 또는 equivalent flow contract를 가져야 한다.
+2. pipeline/stage는 ordering과 steady-state intent를 드러내야 한다.
+3. window/buffer 표현은 direct structural memory macro보다 locality/residency 친화 의미를 우선한다.
+4. service cooperation은 direct host call보다 endpoint/bridge 계약을 우선한다.
+5. `hw.flow`는 PMF 전용이 아니므로 capsule/context/pin/evict 같은 개념을 직접 갖지 않는다.
+
+## 9. bridgeOIR
 
 `bridgeOIR`는 host/device/hardware 경계를 표현하는 placed-stage boundary family다.
 이 family는 transport-only 계층이 아니라 interop, placement, runtime boundary를 담당한다.
 
-### 8.1 bridge opcode
+### 9.1 bridge opcode
 
 ```cpp
 enum class BridgeOpcode : uint16_t {
@@ -483,16 +535,17 @@ enum class BridgeOpcode : uint16_t {
 };
 ```
 
-### 8.2 bridge verifier 규칙
+### 9.2 bridge verifier 규칙
 
 1. `SelectRealization`과 `FallbackRealization`은 computation/realization 관계를 따라야 한다.
 2. `LaunchGpu`는 `gpuOIR::Kernel` realization만 대상으로 한다.
-3. `InvokeHwTemplate`는 검증된 `hwOIR::Module` 또는 cached template realization만 대상으로 한다.
+3. `InvokeHwTemplate`는 검증된 `hw.struct::Module`, `hw.flow` realization, 또는 cached hardware realization만 대상으로 한다.
 4. `ServiceReq`와 `ServiceReply`는 등록된 `GService`를 참조해야 한다.
 5. copy op는 source/destination layout profile과 residency를 함께 검사한다.
 6. async bridge op는 반드시 `token/event`를 생성하거나 소비해야 한다.
+7. PMF capsule activation 세부는 이 family의 canonical 범위 밖이다.
 
-## 9. future family reserve
+## 10. future family reserve
 
 `gOIR`는 확장 가능성을 열어둔다.
 다만 v0 canon은 아래 family를 reserved slot으로만 남긴다.
@@ -504,7 +557,7 @@ enum class BridgeOpcode : uint16_t {
 3. `graphOIR`
    - larger compute graph / scheduling IR
 
-## 10. 추천 구현 순서
+## 11. 추천 구현 순서
 
 1. `SemanticSig`, `GComputation`, `GRealization`, `GPlacementPolicy`, `GService`
 2. `gOIR-open`의 semantic invoke와 `gOIR-placed` materialization 규칙
@@ -512,5 +565,6 @@ enum class BridgeOpcode : uint16_t {
 4. `cpuOIR`의 `If/For/Reduce/Load/Store/Vector*`
 5. `bridgeOIR`의 `SelectRealization/LaunchGpu/ServiceReq/Copy*/Event`
 6. `gpuOIR`의 kernel + memory + barrier + builtin ids
-7. `hwOIR`의 `Module/Port/Reg/Comb/Seq`
-8. 이후 `Framebuffer*`, `Subgroup*`, `Pipeline/Stage`, HW flow/service/template refinement
+7. `hw.struct`의 `Module/Port/Reg/Comb/Seq`
+8. `hw.flow`의 task/pipeline/channel/window/service class
+9. 이후 overlay backend, `hw.flow -> PMF backend` lower-target refinement

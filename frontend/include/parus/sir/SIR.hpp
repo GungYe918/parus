@@ -198,6 +198,7 @@ namespace parus::sir {
         SymbolId callee_sym = k_invalid_symbol;
         TypeId callee_fn_type = k_invalid_type;
         uint32_t callee_decl_stmt = 0xFFFF'FFFFu; // AST StmtId of selected callee decl (for overload-safe lowering)
+        bool call_is_throwing = false;
         bool call_is_c_abi = false;
         bool call_is_c_variadic = false;
         ty::CCallConv call_c_callconv = ty::CCallConv::kDefault;

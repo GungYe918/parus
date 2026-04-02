@@ -253,7 +253,8 @@ namespace parus::ty {
                        const uint8_t* has_default = nullptr,
                        bool fn_is_c_abi = false,
                        bool fn_is_c_variadic = false,
-                       CCallConv fn_callconv = CCallConv::kDefault) {
+                       CCallConv fn_callconv = CCallConv::kDefault,
+                       bool fn_is_throwing = false) {
             if (positional_param_count == 0xFFFF'FFFFu) {
                 positional_param_count = param_count;
             }
@@ -268,6 +269,7 @@ namespace parus::ty {
                 if (t.ret != ret) continue;
                 if (t.param_count != param_count) continue;
                 if (t.positional_param_count != positional_param_count) continue;
+                if (t.fn_is_throwing != fn_is_throwing) continue;
                 if (t.fn_is_c_abi != fn_is_c_abi) continue;
                 if (t.fn_is_c_variadic != fn_is_c_variadic) continue;
                 if (t.fn_callconv != fn_callconv) continue;
@@ -303,6 +305,7 @@ namespace parus::ty {
             t.positional_param_count = positional_param_count;
             t.label_begin = (uint32_t)fn_param_labels_.size();
             t.default_begin = (uint32_t)fn_param_has_default_.size();
+            t.fn_is_throwing = fn_is_throwing;
             t.fn_is_c_abi = fn_is_c_abi;
             t.fn_is_c_variadic = fn_is_c_variadic;
             t.fn_callconv = fn_callconv;
@@ -353,6 +356,11 @@ namespace parus::ty {
         bool fn_is_c_abi(TypeId def) const {
             if (!is_fn(def)) return false;
             return types_[def].fn_is_c_abi;
+        }
+
+        bool fn_is_throwing(TypeId def) const {
+            if (!is_fn(def)) return false;
+            return types_[def].fn_is_throwing;
         }
 
         bool fn_is_c_variadic(TypeId def) const {

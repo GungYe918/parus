@@ -1,6 +1,6 @@
 # Parus gOIR Track
 
-문서 버전: `draft-0.2`  
+문서 버전: `draft-0.3`  
 상태: `Design Freeze (TODO Track)`
 
 이 디렉터리는 Parus의 차세대 IR 축인 `gOIR` 설계 문서를 모은다.
@@ -9,9 +9,9 @@
 ## 1. 목적
 
 1. 현재 `OIR -> LLVM` CPU 경로를 reference/bootstrap lane으로 유지한다.
-2. 차세대 메인라인을 `frontend -> SIR -> gOIR-open -> placement/specialization -> gOIR-placed -> MLIR -> target-code`로 고정한다.
+2. 차세대 메인라인을 `frontend -> SIR -> gOIR-open -> placement/specialization -> gOIR-placed -> lower target -> target-code`로 고정한다.
 3. `gOIR`를 Parus 전용 `semantic + realization + placement + family-region` IR로 정의한다.
-4. `gOIR` 안에서 `SemanticSig`, `GComputation`, `GRealization`, `GPlacementPolicy`, `GService`와 `coreOIR`, `cpuOIR`, `gpuOIR`, `hwOIR`, `bridgeOIR`를 함께 다룬다.
+4. `gOIR` 안에서 `SemanticSig`, `GComputation`, `GRealization`, `GPlacementPolicy`, `GService`와 `coreOIR`, `cpuOIR`, `gpuOIR`, `hw.struct`, `hw.flow`, `bridgeOIR`를 함께 다룬다.
 5. GPU/HW/backend 확장을 문법보다 먼저 IR 계약과 boundary 모델 중심으로 진행한다.
 
 ## 2. canon 결정
@@ -23,15 +23,26 @@
 5. `gOIR`는 `gOIR-open`과 `gOIR-placed`의 2단계 모델을 정식 형태로 사용한다.
 6. `gOIR-open`에서는 semantic invoke와 realization set를 유지하고, `gOIR-placed`에서 family-specific call과 explicit bridge를 확정한다.
 7. `bridgeOIR`는 transport-only 계층이 아니라 interop/placement/runtime boundary 계층이다.
-8. 무거운 최적화와 target-specific legalization은 MLIR 이후 단계로 넘긴다.
-9. cross-region 값 이동과 실행 경계는 placed 단계에서 명시적 bridge node를 통해서만 허용한다.
-10. `hwOIR`는 static RTL-only family가 아니라 structural, flow, service, template 성격을 함께 수용한다.
-11. hot-reload는 이 트랙의 정식 범위에 포함하지 않는다.
+8. hardware lane은 `hw.struct`와 `hw.flow`로 정식 분리한다.
+9. `hw.struct`는 structural, portable, legacy-friendly hardware lane이다.
+10. `hw.flow`는 portable spatial/dataflow hardware lane이며 FPGA overlay, CGRA-like backend, future spatial backend의 공통 진입점이다.
+11. PMF는 `gOIR` family가 아니라 lower target/backend project로 다룬다.
+12. 무거운 최적화와 target-specific legalization은 MLIR 이후 단계로 넘긴다.
+13. cross-region 값 이동과 실행 경계는 placed 단계에서 명시적 bridge node를 통해서만 허용한다.
+14. hot-reload는 이 트랙의 정식 범위에 포함하지 않는다.
 
 ## 3. 문서 인덱스
 
-1. `GOIR_MODEL.md`: semantic entity, open/placed 단계, 메모리 포맷, 계약, ABI, placement, lowering, compile-time, JIT 정책
-2. `GOIR_OPCODE_MODEL.md`: 공통 표현 규칙, placed-stage opcode 체계, semantic invoke가 family opcode에 주는 영향
+1. `GOIR_MODEL.md`
+   - semantic entity
+   - open/placed 단계
+   - 메모리 포맷
+   - 계약, ABI, placement, lowering, compile-time, JIT 정책
+2. `GOIR_OPCODE_MODEL.md`
+   - 공통 표현 규칙
+   - placed-stage opcode 체계
+   - `hw.struct` / `hw.flow` 분리
+   - semantic invoke가 family opcode에 주는 영향
 
 ## 4. 현재 코드베이스와의 관계
 

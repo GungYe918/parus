@@ -152,7 +152,8 @@ namespace parus::cimport {
                         const char cabi = text[pos++];
                         const char variadic = text[pos++];
                         const char cc = text[pos++];
-                        if ((cabi != '0' && cabi != '1') || (variadic != '0' && variadic != '1')) {
+                        if ((cabi != '0' && cabi != '1') ||
+                            (variadic != '0' && variadic != '1')) {
                             return false;
                         }
                         out.fn_is_c_abi = (cabi == '1');
@@ -160,7 +161,15 @@ namespace parus::cimport {
                         out.fn_callconv = decode_callconv_(cc);
                         uint32_t param_count = 0;
                         if (!parse_u32_until_('_', param_count)) return false;
-                        if (!eat('[')) return false;
+                        if (eat('[')) {
+                            out.fn_is_throwing = false;
+                        } else {
+                            if (pos >= text.size()) return false;
+                            const char throwing = text[pos++];
+                            if (throwing != '0' && throwing != '1') return false;
+                            out.fn_is_throwing = (throwing == '1');
+                            if (!eat('[')) return false;
+                        }
                         out.children.resize(static_cast<size_t>(param_count) + 1u);
                         for (size_t i = 0; i < out.children.size(); ++i) {
                             if (!parse_node(out.children[i])) return false;
@@ -235,6 +244,7 @@ namespace parus::cimport {
                     out += std::to_string(node.children.empty() ? 0u
                         : static_cast<uint32_t>(node.children.size() - 1u));
                     out.push_back('_');
+                    out.push_back(node.fn_is_throwing ? '1' : '0');
                     out.push_back('[');
                     for (const auto& child : node.children) serialize_into_(out, child);
                     out.push_back(']');
@@ -358,7 +368,8 @@ namespace parus::cimport {
                         nullptr,
                         node.fn_is_c_abi,
                         node.fn_is_variadic,
-                        node.fn_callconv
+                        node.fn_callconv,
+                        node.fn_is_throwing
                     );
                 }
             }
@@ -450,6 +461,7 @@ namespace parus::cimport {
                 return build_type_semantic_from_type(tt.elem, types, out.children[0]);
             case ty::Kind::kFn: {
                 out.kind = TypeSemanticKind::kFn;
+                out.fn_is_throwing = tt.fn_is_throwing;
                 out.fn_is_c_abi = tt.fn_is_c_abi;
                 out.fn_is_variadic = tt.fn_is_c_variadic;
                 out.fn_callconv = tt.fn_callconv;

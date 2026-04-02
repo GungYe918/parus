@@ -599,7 +599,8 @@ namespace parus::oir {
                         defaults.empty() ? nullptr : defaults.data(),
                         tt.fn_is_c_abi,
                         tt.fn_is_c_variadic,
-                        tt.fn_callconv
+                        tt.fn_callconv,
+                        tt.fn_is_throwing
                     );
                 }
                 default:
@@ -896,7 +897,8 @@ namespace parus::oir {
                 f.ret_ty = static_cast<TypeId>(fn_tt.ret);
                 const bool external_is_throwing =
                     (f.abi == FunctionAbi::Parus) &&
-                    parse_external_throwing_payload_(ss.external_payload);
+                    (types->fn_is_throwing(fn_type) ||
+                     parse_external_throwing_payload_(ss.external_payload));
 
                 const BlockId entry = out->add_block(Block{});
                 f.entry = entry;
@@ -1566,6 +1568,8 @@ namespace parus::oir {
                               ValueId callee,
                               std::vector<ValueId> args,
                               FuncId direct_callee = kInvalidId,
+                              TypeId call_fn_type = kInvalidId,
+                              bool call_is_throwing = false,
                               bool call_is_c_abi = false,
                               bool call_is_c_variadic = false,
                               CCallConv call_c_callconv = CCallConv::Default,
@@ -1576,6 +1580,8 @@ namespace parus::oir {
                     callee,
                     std::move(args),
                     direct_callee,
+                    call_fn_type,
+                    call_is_throwing,
                     call_is_c_abi,
                     call_is_c_variadic,
                     call_c_callconv,
@@ -3944,6 +3950,11 @@ namespace parus::oir {
                 if (direct_callee != kInvalidId && throwing_funcs != nullptr) {
                     direct_callee_throwing = (throwing_funcs->find(direct_callee) != throwing_funcs->end());
                 }
+                const bool call_is_throwing =
+                    direct_callee_throwing ||
+                    (direct_callee == kInvalidId &&
+                     !v.call_is_c_abi &&
+                     v.call_is_throwing);
 
                 const Function* direct_target =
                     (direct_callee != kInvalidId &&
@@ -4156,7 +4167,7 @@ namespace parus::oir {
 
                     args.push_back(draft);
                     args.push_back(ctx);
-                    if (direct_callee_throwing) {
+                    if (call_is_throwing) {
                         args.push_back(exception_ctx_value_());
                     }
                     coerce_args_for_direct_(args);
@@ -4168,7 +4179,7 @@ namespace parus::oir {
                             : kInvalidId;
                     (void)emit_direct_call(unit_ty, direct_callee, std::move(args));
                     (void)emit_direct_call(unit_ty, actor_runtime->leave_fn, {ctx});
-                    if (direct_callee_throwing) {
+                    if (call_is_throwing) {
                         emit_post_throwing_call_check_();
                     }
                     return handle;
@@ -4194,7 +4205,7 @@ namespace parus::oir {
                     const ValueId draft = emit_direct_call(direct_target->actor_owner_type, actor_runtime->draft_ptr_fn, {ctx});
                     args[receiver_index] = draft;
                     args.push_back(ctx);
-                    if (direct_callee_throwing) {
+                    if (call_is_throwing) {
                         args.push_back(exception_ctx_value_());
                     }
                     coerce_args_for_direct_(args);
@@ -4205,7 +4216,7 @@ namespace parus::oir {
                             ? (TypeId)types->builtin(parus::ty::Builtin::kUnit)
                             : kInvalidId;
                     (void)emit_direct_call(unit_ty, actor_runtime->leave_fn, {ctx});
-                    if (direct_callee_throwing) {
+                    if (call_is_throwing) {
                         emit_post_throwing_call_check_();
                     }
                     result = materialize_escape_call_result_(call_ret_ty, result);
@@ -4215,7 +4226,7 @@ namespace parus::oir {
                     return result;
                 }
 
-                if (direct_callee_throwing) {
+                if (call_is_throwing) {
                     args.push_back(exception_ctx_value_());
                 }
                 coerce_args_for_direct_(args);
@@ -4231,12 +4242,14 @@ namespace parus::oir {
                         callee,
                         std::move(args),
                         direct_callee,
+                        static_cast<TypeId>(v.callee_fn_type),
+                        call_is_throwing,
                         v.call_is_c_abi,
                         v.call_is_c_variadic,
                         map_c_callconv_(v.call_c_callconv),
                         v.call_c_fixed_param_count
                     );
-                    if (direct_callee_throwing) {
+                    if (call_is_throwing) {
                         emit_post_throwing_call_check_();
                     }
                     if (ctor_tmp_slot != kInvalidId) return ctor_tmp_slot;
@@ -4248,12 +4261,14 @@ namespace parus::oir {
                     callee,
                     std::move(args),
                     direct_callee,
+                    static_cast<TypeId>(v.callee_fn_type),
+                    call_is_throwing,
                     v.call_is_c_abi,
                     v.call_is_c_variadic,
                     map_c_callconv_(v.call_c_callconv),
                     v.call_c_fixed_param_count
                 );
-                if (direct_callee_throwing) {
+                if (call_is_throwing) {
                     emit_post_throwing_call_check_();
                 }
                 result = materialize_escape_call_result_(call_ret_ty, result);
@@ -7034,7 +7049,8 @@ namespace parus::oir {
                 f.ret_ty = fn_ty.ret;
                 const bool external_is_throwing =
                     (f.abi == FunctionAbi::Parus) &&
-                    parse_external_throwing_payload_(ss.external_payload);
+                    (ty_.fn_is_throwing(ss.declared_type) ||
+                     parse_external_throwing_payload_(ss.external_payload));
 
                 const BlockId entry = out.mod.add_block(Block{});
                 f.entry = entry;

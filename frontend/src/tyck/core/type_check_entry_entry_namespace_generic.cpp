@@ -350,8 +350,10 @@ namespace parus::tyck {
         expr_proto_const_decl_cache_.assign(ast_.exprs().size(), ast::k_invalid_stmt);
         expr_external_callee_symbol_cache_.assign(ast_.exprs().size(), sema::SymbolTable::kNoScope);
         expr_external_callee_type_cache_.assign(ast_.exprs().size(), ty::kInvalidType);
+        expr_call_fn_type_cache_.assign(ast_.exprs().size(), ty::kInvalidType);
         expr_external_receiver_expr_cache_.assign(ast_.exprs().size(), ast::k_invalid_expr);
         expr_array_family_call_kind_cache_.assign(ast_.exprs().size(), static_cast<uint8_t>(ArrayFamilyCallKind::kNone));
+        expr_call_is_throwing_cache_.assign(ast_.exprs().size(), 0u);
         expr_call_is_c_abi_cache_.assign(ast_.exprs().size(), 0u);
         expr_call_is_c_variadic_cache_.assign(ast_.exprs().size(), 0u);
         expr_call_c_callconv_cache_.assign(ast_.exprs().size(), ty::CCallConv::kDefault);
@@ -389,8 +391,10 @@ namespace parus::tyck {
         result_.expr_proto_const_decl = expr_proto_const_decl_cache_;
         result_.expr_external_callee_symbol = expr_external_callee_symbol_cache_;
         result_.expr_external_callee_type = expr_external_callee_type_cache_;
+        result_.expr_call_fn_type = expr_call_fn_type_cache_;
         result_.expr_external_receiver_expr = expr_external_receiver_expr_cache_;
         result_.expr_array_family_call_kind = expr_array_family_call_kind_cache_;
+        result_.expr_call_is_throwing = expr_call_is_throwing_cache_;
         result_.expr_call_is_c_abi = expr_call_is_c_abi_cache_;
         result_.expr_call_is_c_variadic = expr_call_is_c_variadic_cache_;
         result_.expr_call_c_callconv = expr_call_c_callconv_cache_;
@@ -771,8 +775,10 @@ namespace parus::tyck {
         result_.expr_proto_const_decl = expr_proto_const_decl_cache_;
         result_.expr_external_callee_symbol = expr_external_callee_symbol_cache_;
         result_.expr_external_callee_type = expr_external_callee_type_cache_;
+        result_.expr_call_fn_type = expr_call_fn_type_cache_;
         result_.expr_external_receiver_expr = expr_external_receiver_expr_cache_;
         result_.expr_array_family_call_kind = expr_array_family_call_kind_cache_;
+        result_.expr_call_is_throwing = expr_call_is_throwing_cache_;
         result_.expr_call_is_c_abi = expr_call_is_c_abi_cache_;
         result_.expr_call_is_c_variadic = expr_call_is_c_variadic_cache_;
         result_.expr_call_c_callconv = expr_call_c_callconv_cache_;
@@ -1448,7 +1454,8 @@ namespace parus::tyck {
                     has_default.empty() ? nullptr : has_default.data(),
                     types_.fn_is_c_abi(src),
                     types_.fn_is_c_variadic(src),
-                    types_.fn_callconv(src)
+                    types_.fn_callconv(src),
+                    types_.fn_is_throwing(src)
                 );
             }
             default:
@@ -1471,8 +1478,10 @@ namespace parus::tyck {
         if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
         if (expr_external_callee_symbol_cache_.size() < expr_size) expr_external_callee_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (expr_external_callee_type_cache_.size() < expr_size) expr_external_callee_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_call_fn_type_cache_.size() < expr_size) expr_call_fn_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_external_receiver_expr_cache_.size() < expr_size) expr_external_receiver_expr_cache_.resize(expr_size, ast::k_invalid_expr);
         if (expr_array_family_call_kind_cache_.size() < expr_size) expr_array_family_call_kind_cache_.resize(expr_size, static_cast<uint8_t>(ArrayFamilyCallKind::kNone));
+        if (expr_call_is_throwing_cache_.size() < expr_size) expr_call_is_throwing_cache_.resize(expr_size, 0u);
         if (expr_call_is_c_abi_cache_.size() < expr_size) expr_call_is_c_abi_cache_.resize(expr_size, 0u);
         if (expr_call_is_c_variadic_cache_.size() < expr_size) expr_call_is_c_variadic_cache_.resize(expr_size, 0u);
         if (expr_call_c_callconv_cache_.size() < expr_size) expr_call_c_callconv_cache_.resize(expr_size, ty::CCallConv::kDefault);

@@ -227,6 +227,10 @@ namespace parus::tyck {
             expr_external_callee_type_cache_[call_expr_id] = ty::kInvalidType;
         }
         if (call_expr_id != ast::k_invalid_expr &&
+            call_expr_id < expr_call_fn_type_cache_.size()) {
+            expr_call_fn_type_cache_[call_expr_id] = ty::kInvalidType;
+        }
+        if (call_expr_id != ast::k_invalid_expr &&
             call_expr_id < expr_external_receiver_expr_cache_.size()) {
             expr_external_receiver_expr_cache_[call_expr_id] = ast::k_invalid_expr;
         }
@@ -234,6 +238,10 @@ namespace parus::tyck {
             call_expr_id < expr_array_family_call_kind_cache_.size()) {
             expr_array_family_call_kind_cache_[call_expr_id] =
                 static_cast<uint8_t>(ArrayFamilyCallKind::kNone);
+        }
+        if (call_expr_id != ast::k_invalid_expr &&
+            call_expr_id < expr_call_is_throwing_cache_.size()) {
+            expr_call_is_throwing_cache_[call_expr_id] = 0u;
         }
         if (call_expr_id != ast::k_invalid_expr &&
             call_expr_id < expr_call_is_c_abi_cache_.size()) {
@@ -434,7 +442,8 @@ namespace parus::tyck {
                         has_default_flags.empty() ? nullptr : has_default_flags.data(),
                         types_.fn_is_c_abi(t),
                         types_.fn_is_c_variadic(t),
-                        types_.fn_callconv(t)
+                        types_.fn_callconv(t),
+                        types_.fn_is_throwing(t)
                     );
                 }
                 default:
@@ -546,6 +555,27 @@ namespace parus::tyck {
             if (call_expr_id != ast::k_invalid_expr &&
                 call_expr_id < expr_external_callee_type_cache_.size()) {
                 expr_external_callee_type_cache_[call_expr_id] = fn_t;
+            }
+            if (call_expr_id != ast::k_invalid_expr &&
+                call_expr_id < expr_call_fn_type_cache_.size()) {
+                expr_call_fn_type_cache_[call_expr_id] = fn_t;
+            }
+            if (call_expr_id != ast::k_invalid_expr &&
+                call_expr_id < expr_call_is_throwing_cache_.size()) {
+                expr_call_is_throwing_cache_[call_expr_id] =
+                    (fn_t != ty::kInvalidType && types_.fn_is_throwing(fn_t)) ? 1u : 0u;
+            }
+        };
+
+        auto cache_call_fn_type_ = [&](ty::TypeId fn_t) {
+            if (call_expr_id != ast::k_invalid_expr &&
+                call_expr_id < expr_call_fn_type_cache_.size()) {
+                expr_call_fn_type_cache_[call_expr_id] = fn_t;
+            }
+            if (call_expr_id != ast::k_invalid_expr &&
+                call_expr_id < expr_call_is_throwing_cache_.size()) {
+                expr_call_is_throwing_cache_[call_expr_id] =
+                    (fn_t != ty::kInvalidType && types_.fn_is_throwing(fn_t)) ? 1u : 0u;
             }
         };
 
@@ -3124,8 +3154,9 @@ namespace parus::tyck {
                 }
 
                 const bool external_is_throwing =
-                    (selected_external_sym < sym_.symbols().size()) &&
-                    parse_external_throwing_payload_(sym_.symbol(selected_external_sym).external_payload);
+                    types_.fn_is_throwing(selected_external_fn_type) ||
+                    ((selected_external_sym < sym_.symbols().size()) &&
+                     parse_external_throwing_payload_(sym_.symbol(selected_external_sym).external_payload));
                 if (external_is_throwing &&
                     !in_try_expr_context_ &&
                     !fn_ctx_.is_throwing) {
@@ -3248,6 +3279,25 @@ namespace parus::tyck {
         };
 
         auto resolve_c_abi_fn_type = [&](ty::TypeId fn_t) -> ty::TypeId {
+            ty::TypeId cur = fn_t;
+            for (uint32_t depth = 0; depth < 8 && cur != ty::kInvalidType; ++depth) {
+                cur = read_decay_borrow_local(cur);
+                cur = canonicalize_transparent_external_typedef_(cur);
+                if (cur == ty::kInvalidType || cur >= types_.count()) return ty::kInvalidType;
+                const auto& tt = types_.get(cur);
+                if (tt.kind == ty::Kind::kFn) return cur;
+                if (tt.kind == ty::Kind::kPtr ||
+                    tt.kind == ty::Kind::kBorrow ||
+                    tt.kind == ty::Kind::kEscape) {
+                    cur = tt.elem;
+                    continue;
+                }
+                return ty::kInvalidType;
+            }
+            return ty::kInvalidType;
+        };
+
+        auto resolve_any_fn_type = [&](ty::TypeId fn_t) -> ty::TypeId {
             ty::TypeId cur = fn_t;
             for (uint32_t depth = 0; depth < 8 && cur != ty::kInvalidType; ++depth) {
                 cur = read_decay_borrow_local(cur);
@@ -3417,7 +3467,12 @@ namespace parus::tyck {
                     expr_external_callee_type_cache_[call_expr_id] = fn_t;
                 }
                 if (call_expr_id != ast::k_invalid_expr &&
+                    call_expr_id < expr_call_fn_type_cache_.size()) {
+                    expr_call_fn_type_cache_[call_expr_id] = fn_t;
+                }
+                if (call_expr_id != ast::k_invalid_expr &&
                     call_expr_id < expr_call_is_c_abi_cache_.size()) {
+                    expr_call_is_throwing_cache_[call_expr_id] = 0u;
                     expr_call_is_c_abi_cache_[call_expr_id] = 1u;
                     expr_call_is_c_variadic_cache_[call_expr_id] = is_c_variadic ? 1u : 0u;
                     expr_call_c_callconv_cache_[call_expr_id] = types_.fn_callconv(fn_t);
@@ -4739,13 +4794,14 @@ namespace parus::tyck {
         // 3) fallback: overload 집합을 못 찾으면 function type call-shape로 검사
         // ------------------------------------------------------------
         if (overload_decl_ids.empty()) {
-            if (callee_t == ty::kInvalidType || types_.get(callee_t).kind != ty::Kind::kFn) {
+            const ty::TypeId indirect_fn_t = resolve_any_fn_type(callee_t);
+            if (indirect_fn_t == ty::kInvalidType || types_.get(indirect_fn_t).kind != ty::Kind::kFn) {
                 check_all_arg_exprs_only();
                 return fallback_ret;
             }
 
-            const uint32_t total_cnt = callee_param_count;
-            const uint32_t pos_cnt = types_.fn_positional_count(callee_t);
+            const uint32_t total_cnt = types_.get(indirect_fn_t).param_count;
+            const uint32_t pos_cnt = types_.fn_positional_count(indirect_fn_t);
             const uint32_t named_cnt = (total_cnt > pos_cnt) ? (total_cnt - pos_cnt) : 0u;
 
             struct ShapeParam {
@@ -4764,9 +4820,9 @@ namespace parus::tyck {
             for (uint32_t i = 0; i < total_cnt; ++i) {
                 ShapeParam p{};
                 p.idx = i;
-                p.type = types_.fn_param_at(callee_t, i);
-                p.name = std::string(types_.fn_param_label_at(callee_t, i));
-                p.has_default = types_.fn_param_has_default_at(callee_t, i);
+                p.type = types_.fn_param_at(indirect_fn_t, i);
+                p.name = std::string(types_.fn_param_label_at(indirect_fn_t, i));
+                p.has_default = types_.fn_param_has_default_at(indirect_fn_t, i);
 
                 if (i < pos_cnt) {
                     pos_params.push_back(std::move(p));
@@ -4838,6 +4894,16 @@ namespace parus::tyck {
                 return fallback_ret;
             }
 
+            if (types_.fn_is_throwing(indirect_fn_t) &&
+                !types_.fn_is_c_abi(indirect_fn_t) &&
+                !in_try_expr_context_ &&
+                !fn_ctx_.is_throwing) {
+                diag_(diag::Code::kThrowingCallRequiresTryExpr, e.span);
+                err_(e.span, "non-throwing function must use try expression for throwing function value call");
+                check_all_arg_exprs_only();
+                return types_.error();
+            }
+
             const auto check_arg_against_type = [&](const ast::Arg& a, ty::TypeId expected, uint32_t idx) {
                 if (a.expr == ast::k_invalid_expr) {
                     diag_(diag::Code::kTypeArgTypeMismatch, a.span,
@@ -4876,7 +4942,8 @@ namespace parus::tyck {
                 }
             }
 
-            return fallback_ret;
+            cache_call_fn_type_(indirect_fn_t);
+            return types_.get(indirect_fn_t).ret;
         }
 
         struct GenericFailureInfo {
@@ -5596,6 +5663,7 @@ namespace parus::tyck {
                     c_abi_fn_t = selected_decl.type;
                 }
             }
+            cache_call_fn_type_(c_abi_fn_t);
             return check_c_abi_call_with_positions(c_abi_fn_t,
                                                    sema::SymbolTable::kNoScope,
                                                    arg_exprs,
@@ -5612,6 +5680,11 @@ namespace parus::tyck {
                 err_(e.span, "non-throwing function must use try expression for throwing call");
                 check_all_arg_exprs_only();
                 return types_.error();
+            }
+            if (selected_decl.kind == ast::StmtKind::kFnDecl &&
+                selected_decl.type != ty::kInvalidType &&
+                types_.is_fn(selected_decl.type)) {
+                cache_call_fn_type_(selected_decl.type);
             }
         }
 
@@ -5697,5 +5770,12 @@ namespace parus::tyck {
             }
         }
 
+        if (call_expr_id != ast::k_invalid_expr &&
+            call_expr_id < expr_call_fn_type_cache_.size() &&
+            expr_call_fn_type_cache_[call_expr_id] == ty::kInvalidType &&
+            callee_t != ty::kInvalidType &&
+            types_.is_fn(callee_t)) {
+            cache_call_fn_type_(callee_t);
+        }
         return selected.ret;
     }

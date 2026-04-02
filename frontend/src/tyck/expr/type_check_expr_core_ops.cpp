@@ -768,7 +768,57 @@
             }
 
             bool is_throwing_call = false;
-            if ((size_t)e.a < expr_overload_target_cache_.size()) {
+            if ((size_t)e.a < expr_call_is_throwing_cache_.size() &&
+                expr_call_is_throwing_cache_[e.a] != 0u) {
+                is_throwing_call = true;
+            }
+            if (!is_throwing_call &&
+                (size_t)e.a < expr_call_fn_type_cache_.size()) {
+                const ty::TypeId cached_fn_t = expr_call_fn_type_cache_[e.a];
+                if (cached_fn_t != ty::kInvalidType &&
+                    types_.is_fn(cached_fn_t) &&
+                    types_.fn_is_throwing(cached_fn_t) &&
+                    !types_.fn_is_c_abi(cached_fn_t)) {
+                    is_throwing_call = true;
+                }
+            }
+            if (!is_throwing_call && operand.a != ast::k_invalid_expr) {
+                const auto resolve_any_fn_type = [&](ty::TypeId fn_t) -> ty::TypeId {
+                    ty::TypeId cur = fn_t;
+                    for (uint32_t depth = 0; depth < 8 && cur != ty::kInvalidType; ++depth) {
+                        if (cur >= types_.count()) return ty::kInvalidType;
+                        const auto& tt = types_.get(cur);
+                        if (tt.kind == ty::Kind::kFn) return cur;
+                        if (tt.kind == ty::Kind::kPtr ||
+                            tt.kind == ty::Kind::kBorrow ||
+                            tt.kind == ty::Kind::kEscape) {
+                            cur = tt.elem;
+                            continue;
+                        }
+                        return ty::kInvalidType;
+                    }
+                    return ty::kInvalidType;
+                };
+
+                const ty::TypeId callee_t = check_expr_(operand.a);
+                const ty::TypeId callee_fn_t = resolve_any_fn_type(callee_t);
+                if (callee_fn_t != ty::kInvalidType &&
+                    types_.fn_is_throwing(callee_fn_t) &&
+                    !types_.fn_is_c_abi(callee_fn_t)) {
+                    if ((size_t)e.a < expr_call_fn_type_cache_.size()) {
+                        expr_call_fn_type_cache_[e.a] = callee_fn_t;
+                    }
+                    if ((size_t)e.a < expr_call_is_throwing_cache_.size()) {
+                        expr_call_is_throwing_cache_[e.a] = 1u;
+                    }
+                    if ((size_t)e.a < expr_call_is_c_abi_cache_.size()) {
+                        expr_call_is_c_abi_cache_[e.a] = 0u;
+                    }
+                    is_throwing_call = true;
+                }
+            }
+            if (!is_throwing_call &&
+                (size_t)e.a < expr_overload_target_cache_.size()) {
                 const ast::StmtId target_sid = expr_overload_target_cache_[e.a];
                 if (target_sid != ast::k_invalid_stmt && (size_t)target_sid < ast_.stmts().size()) {
                     const auto& target = ast_.stmt(target_sid);

@@ -27,6 +27,7 @@ namespace parus::cimport {
         bool ptr_is_mut = false;
         bool array_has_size = false;
         uint32_t array_size = 0;
+        bool fn_is_throwing = false;
         bool fn_is_c_abi = false;
         bool fn_is_variadic = false;
         ty::CCallConv fn_callconv = ty::CCallConv::kDefault;

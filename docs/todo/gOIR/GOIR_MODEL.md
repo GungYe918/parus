@@ -1,14 +1,20 @@
 # Parus gOIR Model
 
-문서 버전: `draft-0.2`  
+문서 버전: `draft-0.3`  
 상태: `Design Freeze (TODO Track)`
 
-이 문서는 Parus의 차세대 `gOIR`를 "multi-family umbrella IR"에서
-"multi-realization semantic IR + placed IR" 모델로 재정의한다.
+이 문서는 Parus의 차세대 `gOIR`를 "multi-realization semantic IR + placed IR" 모델로 정의한다.
 본 문서의 기준 파이프라인은 아래와 같다.
 
 ```text
-frontend -> SIR -> gOIR-open -> placement/specialization -> gOIR-placed -> MLIR -> target-code
+frontend
+-> SIR
+-> gOIR-open
+-> placement/specialization
+-> gOIR-placed { core, cpu, gpu, hw.struct, hw.flow, bridge }
+-> lower target
+   -> MLIR / CIRCT / overlay backend / PMF backend
+-> target-code
 ```
 
 ## 1. 배경과 canon 결정
@@ -16,8 +22,9 @@ frontend -> SIR -> gOIR-open -> placement/specialization -> gOIR-placed -> MLIR 
 1. 현재 `OIR`은 backend 친화적 실행/최적화 IR이며 CPU/LLVM 경로에 강하게 맞춰져 있다.
 2. GPU/HW까지 장기 확장을 하려면 "여러 family region을 담는 IR"만으로는 부족하고, 하나의 계산과 여러 realization을 함께 다루는 계층이 필요하다.
 3. 따라서 현재 OIR은 migration 기간 동안 `legacy cpuRefOIR` 역할로 남긴다.
-4. 새 메인라인은 `gOIR-open -> gOIR-placed -> MLIR`로 간다.
+4. 새 메인라인은 `gOIR-open -> gOIR-placed -> lower target`으로 간다.
 5. `gOIR`는 MLIR을 그대로 복제하지 않고, Parus 전용 semantic contract, realization, placement, bridge, archive 중심 IR로 설계한다.
+6. PMF는 `gOIR` 내부 family가 아니라 `hw.flow`에서 이어지는 lower target/backend project로 취급한다.
 
 ## 2. 목표
 
@@ -25,16 +32,18 @@ frontend -> SIR -> gOIR-open -> placement/specialization -> gOIR-placed -> MLIR 
 2. `gOIR-open`은 계산 의미와 candidate realization을 보존해야 한다.
 3. `gOIR-placed`는 선택된 realization, concrete ABI, bridge, layout freeze를 명확히 가져야 한다.
 4. `coreOIR`는 매우 빠르게 verify/canonicalize 가능해야 한다.
-5. heavy optimization, vectorization, tiling, hardware lowering은 MLIR 이후 단계에 맡긴다.
-6. parlib archive와 JIT/AOT 공용 입력으로 쓸 수 있어야 한다.
+5. portable hardware lane과 target-specific hardware lane을 분리해야 한다.
+6. Parus가 기존 FPGA/ASIC/CIRCT lane과 future spatial backend를 모두 받을 수 있어야 한다.
+7. parlib archive와 JIT/AOT 공용 입력으로 쓸 수 있어야 한다.
 
 ## 3. 비목표
 
 1. `gOIR`를 범용 외부 생태계 IR로 만드는 것
 2. MLIR dialect 시스템 전체를 다시 구현하는 것
 3. 서로 다른 target op를 같은 block 안에서 instruction 수준으로 뒤섞는 것
-4. arbitrary full hardware synthesis를 인터랙티브 JIT처럼 취급하는 것
-5. hot-reload를 v0 설계 범위에 넣는 것
+4. PMF-specific activation 모델을 `gOIR` family 자체에 넣는 것
+5. arbitrary full hardware synthesis를 인터랙티브 JIT처럼 취급하는 것
+6. hot-reload를 v0 설계 범위에 넣는 것
 
 ## 4. 전체 구성
 
@@ -48,7 +57,7 @@ frontend -> SIR -> gOIR-open -> placement/specialization -> gOIR-placed -> MLIR 
    - 하나의 논리 계산 단위
    - 여러 `GRealization`을 소유
 3. `GRealization`
-   - 특정 computation의 `cpu/gpu/hw` 구현체
+   - 특정 computation의 `cpu/gpu/hw.struct/hw.flow` 구현체
    - entry region, concrete ABI, resource 요구, specialization 메타데이터를 보유
 4. `GPlacementPolicy`
    - fixed, static-choice, runtime-auto, template-only 같은 placement 정책
@@ -65,7 +74,7 @@ frontend -> SIR -> gOIR-open -> placement/specialization -> gOIR-placed -> MLIR 
 2. `gOIR-placed`
    - realization 선택이 끝난 상태다.
    - family-specific call, `bridgeOIR`, concrete layout, resource residency, sync 경계가 확정된다.
-   - MLIR import의 직접 입력은 기본적으로 이 단계다.
+   - MLIR/CIRCT/overlay/PMF backend의 직접 입력은 기본적으로 이 단계다.
 
 ### 4.3 family region 계층
 
@@ -78,10 +87,15 @@ frontend -> SIR -> gOIR-open -> placement/specialization -> gOIR-placed -> MLIR 
 3. `gpuOIR`
    - placed-stage GPU realization family
    - device kernel, address space, barrier, subgroup, image/buffer/framebuffer resource
-4. `hwOIR`
-   - placed-stage HW realization family
-   - module/port/reg/wire 같은 구조 표현뿐 아니라 flow/service/template 성격도 수용
-5. `bridgeOIR`
+4. `hw.struct`
+   - placed-stage structural hardware family
+   - module/port/instance/reg/wire/comb/seq/mem 중심의 portable lane
+   - CIRCT/Verilog/legacy FPGA/ASIC flow로 내리기 위한 기준점
+5. `hw.flow`
+   - placed-stage portable spatial/dataflow hardware family
+   - stream/channel/pipeline/window/service-friendly dataflow 중심의 portable lane
+   - FPGA overlay, CGRA-like backend, future PMF backend의 공통 입력
+6. `bridgeOIR`
    - launch/copy 계층에 그치지 않고 interop, placement, runtime boundary를 표현
 
 ### 4.4 region 규칙
@@ -90,7 +104,8 @@ frontend -> SIR -> gOIR-open -> placement/specialization -> gOIR-placed -> MLIR 
 2. region 내부에서는 같은 family op만 허용한다.
 3. 다른 family 값 참조는 placed 단계에서 bridge 출력만 허용한다.
 4. open 단계의 cross-family 의미 연결은 computation/realization/service 참조로 표현하고 direct family call로 고정하지 않는다.
-5. bridge는 legality, ownership, sync, residency, layout 재검증 지점이다.
+5. `hw.struct`와 `hw.flow`는 서로 다른 family이며 direct op mixing을 허용하지 않는다.
+6. bridge는 legality, ownership, sync, residency, layout 재검증 지점이다.
 
 ## 5. 메모리 내 포맷
 
@@ -179,7 +194,7 @@ struct GComputation {
 
 struct GRealization {
     uint32_t computation;
-    uint16_t family_kind;     // Core/Cpu/Gpu/Hw
+    uint16_t family_kind;     // Core/Cpu/Gpu/HwStruct/HwFlow
     uint16_t invoke_kind;     // InlineLocal/DirectCpu/LaunchGpu/InvokeHw/ServiceMediated
     uint32_t entry_region;
     uint32_t abi_sig;
@@ -230,7 +245,8 @@ enum class GRegionKind : uint8_t {
     Core,
     Cpu,
     Gpu,
-    Hw,
+    HwStruct,
+    HwFlow,
     Bridge,
 };
 
@@ -331,18 +347,38 @@ struct GValue {
 6. buffer/image/sampler/framebuffer resource ops
 7. placed-stage device call과 device-local sync/resource semantics
 
-### 6.4 hwOIR
+### 6.4 hw.struct
 
 1. hw module
 2. port bundle
 3. wire/reg
 4. comb region
 5. seq region with clock/reset
-6. channel/stream handshake
-7. memory macro / pipeline / instance
-8. flow-oriented task/service endpoint와 template-oriented specialization hook
+6. memory macro / instance
+7. legacy-friendly portable structural lane
 
-### 6.5 bridgeOIR
+의도:
+
+1. 기존 CIRCT/Verilog/FPGA/ASIC flow와 자연스럽게 이어진다.
+2. 구조를 드러내는 HW subset의 기준점이 된다.
+3. PMF-specific activation, capsule, residency 의미는 여기 넣지 않는다.
+
+### 6.5 hw.flow
+
+1. stream/channel handshake
+2. pipeline/stage
+3. task/dataflow control
+4. buffer/window/residency-friendly flow
+5. service endpoint cooperation
+6. spatial/dataflow portable lane
+
+의도:
+
+1. PMF 전용 IR가 아니라 overlay, CGRA-like backend, future spatial backend의 공통 입력이다.
+2. direct structural netlist보다 계산 흐름과 지역성 제약을 오래 보존한다.
+3. lower target에서 필요하면 `hw.struct`, overlay IR, PMF backend IR로 각각 갈라질 수 있다.
+
+### 6.6 bridgeOIR
 
 `bridgeOIR`는 target-specific region을 이어주는 transport 계층이 아니라,
 interop/placement/runtime boundary 계약층이다.
@@ -355,6 +391,12 @@ interop/placement/runtime boundary 계약층이다.
 4. realization selection / fallback
 5. residency migration / ownership transfer
 6. template select / configure
+
+비범위:
+
+1. PMF capsule activation 모델
+2. PMF context bank 운영 세부
+3. PMF warm/cold activation 세부
 
 ## 7. archive 정책
 
@@ -465,16 +507,18 @@ Bridge ABI는 서로 다른 실행 자원 사이의 경계 ABI다.
 범위:
 
 1. host <-> gpu
-2. host <-> hw
-3. gpu <-> runtime service
-4. hw <-> runtime service
-5. service-mediated host/hw cooperation
+2. host <-> hw.struct
+3. host <-> hw.flow
+4. gpu <-> runtime service
+5. hardware realization <-> runtime service
+6. service-mediated host/hw cooperation
 
 원칙:
 
 1. bridge는 explicit descriptor 중심으로 표현한다.
 2. bridge는 implicit runtime object를 숨기지 않는다.
 3. bridge는 ownership, sync, visibility, residency legality를 재검증한다.
+4. PMF-specific activation 계약은 backend lower-target 문서로 넘긴다.
 
 ### 8.4 외부 ABI
 
@@ -485,8 +529,8 @@ Bridge ABI는 서로 다른 실행 자원 사이의 경계 ABI다.
 ### 8.5 ABI legality rules
 
 1. GPU kernel ABI에는 actor/class/borrow/escape/throw를 넣지 않는다.
-2. HW template ABI에는 runtime object와 heap object를 넣지 않는다.
-3. `SemanticSig`는 가족(family)에 종속되지 않아야 한다.
+2. hardware template ABI에는 runtime object와 heap object를 넣지 않는다.
+3. `SemanticSig`는 family에 종속되지 않아야 한다.
 4. 하나의 computation은 여러 `AbiSig`를 가진 realization을 가질 수 있다.
 
 ## 9. lowering 전략
@@ -503,8 +547,8 @@ AST
 -> gOIR-open verify + cheap canonicalize
 -> placement/specialization
 -> gOIR-placed verify + cheap canonicalize
--> MLIR import
--> target-specific MLIR pipeline
+-> lower target
+-> target-specific pipeline
 -> target-code
 ```
 
@@ -512,7 +556,7 @@ AST
 
 1. SIR canonical pass에서 shape, effect, target intent를 정리한다.
 2. computation 후보를 식별하고 `SemanticSig`를 만든다.
-3. candidate realization set를 `cpu/gpu/hw` family 기준으로 붙인다.
+3. candidate realization set를 `cpu/gpu/hw.struct/hw.flow` family 기준으로 붙인다.
 4. open 단계 호출은 concrete family call이 아니라 semantic invoke로 유지한다.
 5. layout과 ABI는 logical 수준까지만 기록하고 externally visible concrete form은 아직 freeze하지 않는다.
 
@@ -535,8 +579,6 @@ AST
 
 ### 9.4 placement / specialization
 
-이 단계는 `gOIR`의 핵심 변환 단계다.
-
 역할:
 
 1. computation별 realization 선택
@@ -544,6 +586,7 @@ AST
 3. semantic invoke를 direct family call 또는 `bridgeOIR`로 materialize
 4. service request / reply 경계 삽입
 5. concrete layout, residency, sync contract freeze
+6. `hw.flow` realization이 선택된 뒤 lower target 후보를 overlay/CGRA-like/PMF backend로 남길 수 있다
 
 ### 9.5 gOIR-placed 내부 pass
 
@@ -563,19 +606,21 @@ AST
 3. target-specific scheduling
 4. full hardware resource binding optimization
 
-### 9.6 gOIR-placed -> MLIR
+### 9.6 gOIR-placed -> lower target
 
 1. `coreOIR` -> `parus.core` 또는 `arith/cf/scf`
 2. `cpuOIR` -> `memref/scf/affine/vector/llvm`
 3. `gpuOIR` -> `gpu/spirv` 또는 backend-specific GPU lowering lane
-4. `hwOIR` -> CIRCT `hw/seq/comb/handshake` 계열
-5. `bridgeOIR` -> runtime/async/token/resource/service dialect
+4. `hw.struct` -> CIRCT `hw/comb/seq/sv` 또는 동등 structural lane -> Verilog -> FPGA/ASIC
+5. `hw.flow` -> overlay IR / CGRA-like backend / future spatial backend
+6. `hw.flow` -> PMF backend -> `pmfIR/capsule`
+7. `bridgeOIR` -> runtime/async/token/resource/service dialect
 
 ### 9.7 legacy lane
 
 1. migration 동안 `SIR -> current OIR -> LLVM`를 유지한다.
 2. 이 경로는 CPU reference/backend regression lane이다.
-3. overlapping subset에 대해 `legacy OIR`와 `gOIR-placed -> MLIR` 결과를 differential test 한다.
+3. overlapping subset에 대해 `legacy OIR`와 `gOIR-placed` 결과를 differential test 한다.
 
 ## 10. 컴파일 속도 정책
 
@@ -584,7 +629,7 @@ AST
 1. frontend에서 SIR까지의 시간은 지금과 큰 차이가 없다.
 2. `SIR -> gOIR-open`은 현재 `SIR -> OIR`보다 약간 느려질 수 있다.
 3. `gOIR-open -> placement -> gOIR-placed`가 새 비용으로 추가된다.
-4. CPU cold compile은 `gOIR-placed -> MLIR -> LLVM` 경로가 현재 `OIR -> LLVM`보다 대체로 느릴 가능성이 높다.
+4. CPU cold compile은 `gOIR-placed -> lower target -> LLVM` 경로가 현재 `OIR -> LLVM`보다 대체로 느릴 가능성이 높다.
 5. 대신 loop/access/vector 정보를 늦게까지 보존하면 최적화 품질은 좋아질 수 있다.
 6. GPU/HW AOT compile은 CPU보다 훨씬 느릴 수 있다.
 
@@ -593,22 +638,22 @@ AST
 1. `coreOIR` verify/canonicalize는 매우 빨라야 한다.
 2. `gOIR-open`은 semantic consistency와 placement 준비에 집중한다.
 3. `gOIR-placed`는 cheap legality, bridge normalization, archive friendliness에 집중한다.
-4. heavy pass는 MLIR 단계로 미룬다.
-5. GPU/HW는 template/cache 중심으로 재사용을 강하게 유도한다.
+4. heavy pass는 lower-target 이후 단계로 미룬다.
+5. hardware path는 template/cache 중심으로 재사용을 강하게 유도한다.
 
 ### 10.3 권장 컴파일 프로파일
 
 1. `dev-fast`
    - minimal open/placed checks
    - shallow placement
-   - shallow MLIR pipeline
+   - shallow lower-target pipeline
    - CPU reference lane fallback 허용
 2. `balanced`
    - 기본 개발 프로파일
    - 표준 placement + CPU/GPU 일반 최적화
 3. `max-opt`
    - 장시간 placement/cost-model
-   - 장시간 MLIR optimization
+   - 장시간 target-specific optimization
    - hw template search 강화
 
 ### 10.4 CPU 경로에 대한 판단
@@ -672,5 +717,8 @@ hot-reload는 보류한다. 이 문서에서 말하는 JIT는 실행 중 special
 1. `gOIR`의 정식 형태는 `gOIR-open`과 `gOIR-placed`의 2단계 모델이다.
 2. `gOIR`의 핵심 추상화는 family region 자체가 아니라 `SemanticSig`, `GComputation`, `GRealization`, `GPlacementPolicy`, `GService`다.
 3. `bridgeOIR`는 transport-only IR가 아니라 interop/placement/runtime boundary IR다.
-4. `hwOIR`는 static RTL-only family가 아니라 structural, flow, service, template 성격을 함께 수용해야 한다.
-5. current OIR은 계속 legacy CPU reference lane으로 유지한다.
+4. hardware lane은 `hw.struct`와 `hw.flow`로 정식 분리한다.
+5. `hw.struct`는 CIRCT/Verilog/legacy FPGA/ASIC 친화 portable structural lane이다.
+6. `hw.flow`는 overlay, CGRA-like backend, PMF backend로 이어질 수 있는 portable spatial/dataflow lane이다.
+7. PMF는 `gOIR` family가 아니라 lower target/backend project다.
+8. current OIR은 계속 legacy CPU reference lane으로 유지한다.

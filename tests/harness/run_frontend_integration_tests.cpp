@@ -3900,6 +3900,139 @@ namespace {
         return ok;
     }
 
+    static bool test_function_type_throwing_bit_distinguished() {
+        parus::ty::TypePool types{};
+        const auto i32_ty = types.builtin(parus::ty::Builtin::kI32);
+        const auto fn_plain = types.make_fn(i32_ty, nullptr, 0u);
+        const auto fn_throwing = types.make_fn(
+            i32_ty,
+            nullptr,
+            0u,
+            0u,
+            nullptr,
+            nullptr,
+            false,
+            false,
+            parus::ty::CCallConv::kDefault,
+            true
+        );
+
+        bool ok = true;
+        ok &= require_(fn_plain != fn_throwing,
+                       "throwing and non-throwing function types must intern distinctly");
+        ok &= require_(!types.fn_is_throwing(fn_plain),
+                       "non-throwing function type must report fn_is_throwing=false");
+        ok &= require_(types.fn_is_throwing(fn_throwing),
+                       "throwing function type must report fn_is_throwing=true");
+        return ok;
+    }
+
+    static bool test_indirect_throwing_call_requires_try_expr() {
+        const std::string src = R"(
+            proto Recoverable {};
+
+            struct Err: Recoverable {
+                code: i32;
+            };
+
+            def leaf?() -> i32 {
+                throw Err { code: 7i32 };
+            }
+
+            def main() -> i32 {
+                set f = leaf;
+                return f();
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(count_diag_code_(p.bag, parus::diag::Code::kThrowingCallRequiresTryExpr) == 1,
+                       "indirect throwing function value call must require try expression exactly once");
+        return ok;
+    }
+
+    static bool test_try_expr_over_indirect_throwing_escape_call_returns_optional_owner() {
+        const std::string src = R"(
+            proto Recoverable {};
+
+            struct LoadErr: Recoverable {
+                code: i32;
+            };
+
+            class Worker {
+                value: i32;
+
+                init(v: i32) {
+                    self.value = v;
+                }
+            }
+
+            def load?(ok: bool) -> ~Worker {
+                if (ok) {
+                    set w = Worker(7i32);
+                    return ~w;
+                }
+                throw LoadErr { code: 1i32 };
+            }
+
+            def main() -> i32 {
+                set f = load;
+                let h: (~Worker)? = try f(false);
+                if (h == null) {
+                    return 0i32;
+                }
+                return 1i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        parus::ast::ExprId try_eid = parus::ast::k_invalid_expr;
+        parus::ast::ExprId call_eid = parus::ast::k_invalid_expr;
+        for (uint32_t i = 0; i < p.ast.exprs().size(); ++i) {
+            const auto& e = p.ast.exprs()[i];
+            if (e.kind == parus::ast::ExprKind::kUnary &&
+                e.op == parus::syntax::TokenKind::kKwTry) {
+                try_eid = i;
+                call_eid = e.a;
+                break;
+            }
+        }
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "try expr over indirect throwing ~ call must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "try expr over indirect throwing ~ call must typecheck");
+        ok &= require_(try_eid != parus::ast::k_invalid_expr, "test source must contain a try expression");
+        ok &= require_(call_eid != parus::ast::k_invalid_expr, "try expression must wrap a call expression");
+        if (!ok) return false;
+
+        const auto try_ty = ty.expr_types[try_eid];
+        ok &= require_(try_ty != parus::ty::kInvalidType, "try expression must have a concrete type");
+        if (!ok) return false;
+        const auto& tt = p.types.get(try_ty);
+        ok &= require_(tt.kind == parus::ty::Kind::kOptional,
+                       "indirect try expression over ~ return must produce an optional");
+        ok &= require_(tt.elem != parus::ty::kInvalidType &&
+                           p.types.get(tt.elem).kind == parus::ty::Kind::kEscape,
+                       "indirect try expression over ~ return must produce (~T)?");
+        ok &= require_(call_eid < ty.expr_call_fn_type.size() &&
+                           ty.expr_call_fn_type[call_eid] != parus::ty::kInvalidType,
+                       "indirect call must cache its callee function type");
+        ok &= require_(call_eid < ty.expr_call_is_throwing.size() &&
+                           ty.expr_call_is_throwing[call_eid] != 0u,
+                       "indirect throwing call must be marked as throwing in tyck metadata");
+        if (!ok) return false;
+        ok &= require_(p.types.fn_is_throwing(ty.expr_call_fn_type[call_eid]),
+                       "cached indirect callee function type must preserve the throwing bit");
+        return ok;
+    }
+
     static bool test_untyped_catch_binder_is_rethrow_only() {
         const std::string src = R"(
             proto Recoverable {};
@@ -4173,11 +4306,13 @@ namespace {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     struct Case {
         const char* name;
         bool (*def)();
     };
+
+    const std::string_view filter = (argc >= 2 && argv[1] != nullptr) ? std::string_view(argv[1]) : std::string_view{};
 
     const Case cases[] = {
         {"suffix_literals_work", test_suffix_literals_work},
@@ -4278,6 +4413,9 @@ int main() {
         {"try_expr_operand_must_be_throwing_call_single_core", test_try_expr_operand_must_be_throwing_call_single_core},
         {"try_expr_c_abi_call_rejected", test_try_expr_c_abi_call_rejected},
         {"try_expr_throwing_escape_call_returns_optional_owner", test_try_expr_throwing_escape_call_returns_optional_owner},
+        {"function_type_throwing_bit_distinguished", test_function_type_throwing_bit_distinguished},
+        {"indirect_throwing_call_requires_try_expr", test_indirect_throwing_call_requires_try_expr},
+        {"try_expr_over_indirect_throwing_escape_call_returns_optional_owner", test_try_expr_over_indirect_throwing_escape_call_returns_optional_owner},
         {"untyped_catch_binder_is_rethrow_only", test_untyped_catch_binder_is_rethrow_only},
         {"throw_payload_rejects_nested_owner_handle", test_throw_payload_rejects_nested_owner_handle},
         {"recoverable_payload_envelope_limit_diag", test_recoverable_payload_envelope_limit_diag},
@@ -4292,6 +4430,7 @@ int main() {
 
     int failed = 0;
     for (const auto& tc : cases) {
+        if (!filter.empty() && filter != tc.name) continue;
         std::cout << "[TEST] " << tc.name << "\n";
         const bool ok = tc.def();
         if (!ok) {

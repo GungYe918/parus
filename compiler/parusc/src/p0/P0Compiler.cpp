@@ -1202,7 +1202,8 @@ namespace parusc::p0 {
                             defaults.empty() ? nullptr : defaults.data(),
                             tt.fn_is_c_abi,
                             tt.fn_is_c_variadic,
-                            tt.fn_callconv
+                            tt.fn_callconv,
+                            tt.fn_is_throwing
                         );
                     }
                     case Kind::kError:
@@ -1830,7 +1831,8 @@ namespace parusc::p0 {
                                 defaults.empty() ? nullptr : defaults.data(),
                                 tt.fn_is_c_abi,
                                 tt.fn_is_c_variadic,
-                                tt.fn_callconv
+                                tt.fn_callconv,
+                                tt.fn_is_throwing
                             );
                         }
                         break;
@@ -2043,7 +2045,8 @@ namespace parusc::p0 {
                                 defaults.empty() ? nullptr : defaults.data(),
                                 tt.fn_is_c_abi,
                                 tt.fn_is_c_variadic,
-                                tt.fn_callconv
+                                tt.fn_callconv,
+                                tt.fn_is_throwing
                             );
                         }
                         break;

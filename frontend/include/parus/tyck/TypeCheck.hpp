@@ -235,8 +235,10 @@ namespace parus::tyck {
         std::vector<ast::StmtId> expr_proto_const_decl; // expr index -> selected proto provide-const decl stmt id
         std::vector<uint32_t> expr_external_callee_symbol; // expr index -> direct external callee symbol id
         std::vector<ty::TypeId> expr_external_callee_type; // expr index -> concrete selected external callee fn type
+        std::vector<ty::TypeId> expr_call_fn_type; // expr index -> concrete callee fn type for direct/indirect lowering
         std::vector<ast::ExprId> expr_external_receiver_expr; // expr index -> implicit receiver expr for external dot-call
         std::vector<uint8_t> expr_array_family_call_kind; // expr index -> tyck::ArrayFamilyCallKind for compiler-owned sized array methods
+        std::vector<uint8_t> expr_call_is_throwing; // expr index -> call lowers via Parus throwing lane
         std::vector<uint8_t> expr_call_is_c_abi; // expr index -> call lowers with C ABI
         std::vector<uint8_t> expr_call_is_c_variadic; // expr index -> call is C variadic
         std::vector<ty::CCallConv> expr_call_c_callconv; // expr index -> callsite C callconv
@@ -585,8 +587,10 @@ namespace parus::tyck {
         std::vector<ast::StmtId> expr_proto_const_decl_cache_;
         std::vector<uint32_t> expr_external_callee_symbol_cache_;
         std::vector<ty::TypeId> expr_external_callee_type_cache_;
+        std::vector<ty::TypeId> expr_call_fn_type_cache_;
         std::vector<ast::ExprId> expr_external_receiver_expr_cache_;
         std::vector<uint8_t> expr_array_family_call_kind_cache_;
+        std::vector<uint8_t> expr_call_is_throwing_cache_;
         std::vector<uint8_t> expr_call_is_c_abi_cache_;
         std::vector<uint8_t> expr_call_is_c_variadic_cache_;
         std::vector<ty::CCallConv> expr_call_c_callconv_cache_;
