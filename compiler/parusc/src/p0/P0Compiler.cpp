@@ -14,6 +14,11 @@
 #include <parus/common/ModulePath.hpp>
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/diag/Render.hpp>
+#include <parus/goir/Builder.hpp>
+#include <parus/goir/Passes.hpp>
+#include <parus/goir/Placement.hpp>
+#include <parus/goir/Print.hpp>
+#include <parus/goir/Verify.hpp>
 #include <parus/lex/Lexer.hpp>
 #include <parus/oir/Builder.hpp>
 #include <parus/oir/Passes.hpp>
@@ -34,6 +39,10 @@
 #if PARUSC_HAS_AOT_BACKEND
 #include <parus/backend/aot/AOTBackend.hpp>
 #include <parus/backend/link/Linker.hpp>
+#endif
+
+#if PARUSC_HAS_MLIR_BACKEND
+#include <parus/backend/mlir/GOIRMLIRLowering.hpp>
 #endif
 
 #include <filesystem>
@@ -4257,6 +4266,36 @@ namespace parusc::p0 {
             return true;
         }
 
+        [[maybe_unused]] bool write_text_output_(
+            const std::string& out_path,
+            std::string_view text,
+            std::string& out_err
+        ) {
+            namespace fs = std::filesystem;
+            out_err.clear();
+            std::error_code ec{};
+            const fs::path p(out_path);
+            const auto dir = p.parent_path();
+            if (!dir.empty()) {
+                fs::create_directories(dir, ec);
+                if (ec) {
+                    out_err = "failed to create output directory: " + dir.string();
+                    return false;
+                }
+            }
+            std::ofstream ofs(out_path, std::ios::binary | std::ios::trunc);
+            if (!ofs.is_open()) {
+                out_err = "failed to open output: " + out_path;
+                return false;
+            }
+            ofs << text;
+            if (!ofs.good()) {
+                out_err = "failed to write output: " + out_path;
+                return false;
+            }
+            return true;
+        }
+
         bool find_json_key_pos_(std::string_view text, std::string_view key, size_t& out_pos) {
             const std::string needle = "\"" + std::string(key) + "\"";
             const size_t at = text.find(needle);
@@ -7869,6 +7908,94 @@ namespace parusc::p0 {
 
         if (opt.has_xparus && opt.internal.sir_dump) {
             parusc::dump::dump_sir_module(sir_mod, types);
+        }
+
+        const bool wants_goir_open =
+            opt.has_xparus && (opt.internal.goir_dump || opt.internal.goir_placed_dump
+                || opt.internal.emit_goir_mlir || opt.internal.emit_goir_llvm_ir);
+        const bool wants_goir_output =
+            opt.has_xparus && (opt.internal.emit_goir_mlir || opt.internal.emit_goir_llvm_ir);
+
+        std::optional<parus::goir::BuildResult> goir_open_res{};
+        std::optional<parus::goir::PlacementResult> goir_placed_res{};
+
+        auto ensure_goir_open_ = [&]() -> bool {
+            if (goir_open_res.has_value()) return goir_open_res->ok;
+            auto built = parus::goir::build_from_sir(sir_mod, types);
+            if (!built.ok) {
+                for (const auto& msg : built.messages) {
+                    std::cerr << "error: gOIR build: " << msg.msg << "\n";
+                }
+            }
+            goir_open_res = std::move(built);
+            return goir_open_res->ok;
+        };
+
+        auto ensure_goir_placed_ = [&]() -> bool {
+            if (goir_placed_res.has_value()) return goir_placed_res->ok;
+            if (!ensure_goir_open_()) return false;
+            auto placed = parus::goir::place_module(goir_open_res->mod);
+            if (!placed.ok) {
+                for (const auto& msg : placed.messages) {
+                    std::cerr << "error: gOIR placement: " << msg.msg << "\n";
+                }
+            }
+            goir_placed_res = std::move(placed);
+            return goir_placed_res->ok;
+        };
+
+        if (wants_goir_open) {
+            if (!ensure_goir_open_()) return 1;
+            if (opt.has_xparus && opt.internal.goir_dump) {
+                std::cout << parus::goir::to_string(goir_open_res->mod, &types);
+            }
+            if (opt.has_xparus && (opt.internal.goir_placed_dump || wants_goir_output)) {
+                if (!ensure_goir_placed_()) return 1;
+                if (opt.internal.goir_placed_dump) {
+                    std::cout << parus::goir::to_string(goir_placed_res->mod, &types);
+                }
+            }
+
+            if (wants_goir_output) {
+#if PARUSC_HAS_MLIR_BACKEND
+                if (!ensure_goir_placed_()) return 1;
+                if (opt.internal.emit_goir_mlir) {
+                    auto lowered = parus::backend::mlir::lower_goir_to_mlir_text(goir_placed_res->mod, types);
+                    for (const auto& msg : lowered.messages) {
+                        if (msg.is_error) std::cerr << "error: gOIR->MLIR: " << msg.text << "\n";
+                    }
+                    if (!lowered.ok) return 1;
+                    std::string write_err{};
+                    if (!write_text_output_(opt.output_path, lowered.mlir_text, write_err)) {
+                        std::cerr << "error: " << write_err << "\n";
+                        return 1;
+                    }
+                    return 0;
+                }
+                if (opt.internal.emit_goir_llvm_ir) {
+                    auto lowered = parus::backend::mlir::lower_goir_to_llvm_ir_text(
+                        goir_placed_res->mod,
+                        types,
+                        parus::backend::mlir::GOIRLoweringOptions{
+                            .llvm_lane_major = 20,
+                        }
+                    );
+                    for (const auto& msg : lowered.messages) {
+                        if (msg.is_error) std::cerr << "error: gOIR->LLVM: " << msg.text << "\n";
+                    }
+                    if (!lowered.ok) return 1;
+                    std::string write_err{};
+                    if (!write_text_output_(opt.output_path, lowered.llvm_ir, write_err)) {
+                        std::cerr << "error: " << write_err << "\n";
+                        return 1;
+                    }
+                    return 0;
+                }
+#else
+                std::cerr << "error: parusc was built without MLIR-backed gOIR lowering support.\n";
+                return 1;
+#endif
+            }
         }
 
         std::unordered_set<parus::ty::TypeId> oir_tag_only_enum_type_ids = tyck_res.tag_only_enum_type_ids;

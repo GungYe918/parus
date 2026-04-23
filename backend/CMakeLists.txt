@@ -22,6 +22,10 @@ if(PARUS_ENABLE_AOT_BACKEND)
     add_subdirectory(src/aot)
 endif()
 
+if(PARUS_ENABLE_MLIR)
+    add_subdirectory(src/mlir)
+endif()
+
 add_subdirectory(src/prt)
 add_subdirectory(src/link)
 add_subdirectory(src/parlib)

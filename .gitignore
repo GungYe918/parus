@@ -1,4 +1,5 @@
 build/
+build-mlir/
 build_dbg/
 target/
 docs/memo/*

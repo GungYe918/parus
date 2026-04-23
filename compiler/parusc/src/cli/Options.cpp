@@ -29,12 +29,28 @@ namespace parusc::cli {
                 out.internal.oir_dump = true;
                 return true;
             }
+            if (token == "-goir-dump") {
+                out.internal.goir_dump = true;
+                return true;
+            }
+            if (token == "-goir-placed-dump") {
+                out.internal.goir_placed_dump = true;
+                return true;
+            }
             if (token == "-emit-llvm-ir") {
                 out.internal.emit_llvm_ir = true;
                 return true;
             }
             if (token == "-emit-object") {
                 out.internal.emit_object = true;
+                return true;
+            }
+            if (token == "-emit-goir-mlir") {
+                out.internal.emit_goir_mlir = true;
+                return true;
+            }
+            if (token == "-emit-goir-llvm-ir") {
+                out.internal.emit_goir_llvm_ir = true;
                 return true;
             }
             return false;
@@ -146,7 +162,8 @@ namespace parusc::cli {
                 out.error = "-fsyntax-only cannot be combined with -o";
                 return false;
             }
-            if (out.emit_object || out.internal.emit_object || out.internal.emit_llvm_ir) {
+            if (out.emit_object || out.internal.emit_object || out.internal.emit_llvm_ir
+                || out.internal.emit_goir_mlir || out.internal.emit_goir_llvm_ir) {
                 out.ok = false;
                 out.error = "-fsyntax-only cannot be combined with -Xparus emit options";
                 return false;
@@ -419,8 +436,12 @@ namespace parusc::cli {
             << "  -Xparus -ast-dump\n"
             << "  -Xparus -sir-dump\n"
             << "  -Xparus -oir-dump\n"
+            << "  -Xparus -goir-dump\n"
+            << "  -Xparus -goir-placed-dump\n"
             << "  -Xparus -emit-llvm-ir\n"
             << "  -Xparus -emit-object\n"
+            << "  -Xparus -emit-goir-mlir\n"
+            << "  -Xparus -emit-goir-llvm-ir\n"
             << "\n"
             << "LSP mode:\n"
             << "  parusc lsp --stdio\n";
@@ -785,6 +806,8 @@ namespace parusc::cli {
 
         if (out.output_path.empty() && !out.syntax_only) {
             if (out.internal.emit_object) out.output_path = "a.o";
+            else if (out.internal.emit_goir_mlir) out.output_path = "a.mlir";
+            else if (out.internal.emit_goir_llvm_ir) out.output_path = "a.ll";
             else if (out.internal.emit_llvm_ir) out.output_path = "a.ll";
             else out.output_path = "a.out";
         }

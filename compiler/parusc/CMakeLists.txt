@@ -19,6 +19,13 @@ else()
     target_compile_definitions(parusc PRIVATE PARUSC_HAS_AOT_BACKEND=0)
 endif()
 
+if(TARGET parus_backend_mlir)
+    target_link_libraries(parusc PRIVATE parus_backend_mlir)
+    target_compile_definitions(parusc PRIVATE PARUSC_HAS_MLIR_BACKEND=1)
+else()
+    target_compile_definitions(parusc PRIVATE PARUSC_HAS_MLIR_BACKEND=0)
+endif()
+
 if(TARGET parus_backend_link)
     target_link_libraries(parusc PRIVATE parus_backend_link)
 endif()

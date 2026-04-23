@@ -46,6 +46,13 @@ add_library(parus_frontend STATIC
     src/oir/oir_passes.cpp
     src/oir/oir_print.cpp
     src/oir/oir_verify.cpp
+
+    # gOIR (next-generation frontend IR)
+    src/goir/goir_builder.cpp
+    src/goir/goir_passes.cpp
+    src/goir/goir_print.cpp
+    src/goir/goir_placement.cpp
+    src/goir/goir_verify.cpp
 )
 
 

@@ -27,6 +27,10 @@ add_executable(parus_oir_tests
     harness/run_oir_tests.cpp
 )
 
+add_executable(parus_goir_tests
+    harness/run_goir_tests.cpp
+)
+
 add_executable(parusc_cli_option_tests
     harness/run_cli_option_tests.cpp
     ${CMAKE_SOURCE_DIR}/compiler/parusc/src/cli/Options.cpp
@@ -53,6 +57,7 @@ target_link_libraries(parus_parser_incremental_merge_tests PRIVATE parus_fronten
 target_link_libraries(parus_parser_crash_tests PRIVATE parus_frontend)
 target_link_libraries(parus_parser_ast_golden_tests PRIVATE parus_frontend)
 target_link_libraries(parus_oir_tests PRIVATE parus_frontend)
+target_link_libraries(parus_goir_tests PRIVATE parus_frontend)
 target_link_libraries(parusc_cli_option_tests PRIVATE parus_frontend)
 if (TARGET parus_cli_tests)
     target_link_libraries(parus_cli_tests PRIVATE parus_frontend)
@@ -71,6 +76,7 @@ target_compile_features(parus_parser_incremental_merge_tests PRIVATE cxx_std_23)
 target_compile_features(parus_parser_crash_tests PRIVATE cxx_std_23)
 target_compile_features(parus_parser_ast_golden_tests PRIVATE cxx_std_23)
 target_compile_features(parus_oir_tests PRIVATE cxx_std_23)
+target_compile_features(parus_goir_tests PRIVATE cxx_std_23)
 target_compile_features(parusc_cli_option_tests PRIVATE cxx_std_23)
 if (TARGET parus_cli_tests)
     target_compile_features(parus_cli_tests PRIVATE cxx_std_23)
@@ -140,6 +146,7 @@ if (MSVC)
     target_compile_options(parus_parser_crash_tests PRIVATE /W4 /permissive-)
     target_compile_options(parus_parser_ast_golden_tests PRIVATE /W4 /permissive-)
     target_compile_options(parus_oir_tests PRIVATE /W4 /permissive-)
+    target_compile_options(parus_goir_tests PRIVATE /W4 /permissive-)
     target_compile_options(parusc_cli_option_tests PRIVATE /W4 /permissive-)
     if (TARGET parus_cli_tests)
         target_compile_options(parus_cli_tests PRIVATE /W4 /permissive-)
@@ -158,6 +165,7 @@ else()
     target_compile_options(parus_parser_crash_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
     target_compile_options(parus_parser_ast_golden_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
     target_compile_options(parus_oir_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
+    target_compile_options(parus_goir_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
     target_compile_options(parusc_cli_option_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
     if (TARGET parus_cli_tests)
         target_compile_options(parus_cli_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
@@ -200,6 +208,19 @@ if (TARGET parus_backend_aot)
     else()
     target_compile_options(parus_ffi_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
     endif()
+    endif()
+endif()
+
+if (TARGET parus_backend_mlir)
+    add_executable(parus_goir_mlir_tests
+        harness/run_goir_mlir_tests.cpp
+    )
+    target_link_libraries(parus_goir_mlir_tests PRIVATE parus_frontend parus_backend_mlir)
+    target_compile_features(parus_goir_mlir_tests PRIVATE cxx_std_23)
+    if (MSVC)
+        target_compile_options(parus_goir_mlir_tests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(parus_goir_mlir_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
     endif()
 endif()
 

@@ -428,7 +428,7 @@ enum class GpuOpcode : uint16_t {
 1. open 단계에서는 structural hardware 자체로 고정하지 않고 candidate realization으로만 유지한다.
 2. placed 단계에서 structural path가 선택되면 `bridge.invoke_hw` 또는 structural export lane과 연결된다.
 3. `hw.struct`는 CIRCT/Verilog/legacy FPGA/ASIC flow의 기준점이다.
-4. capsule, warm/cold activation, context bank 같은 PMF-specific 개념은 이 family에 올리지 않는다.
+4. Morphform, warm/cold activation, context bank 같은 PMF-specific 개념은 이 family에 올리지 않는다.
 
 ### 7.3 hw.struct opcode
 
@@ -476,7 +476,7 @@ enum class HwStructOpcode : uint16_t {
 1. open 단계에서는 `hw.flow`를 direct backend target으로 고정하지 않는다.
 2. placed 단계에서 `hw.flow` realization은 overlay backend, CGRA-like backend, PMF backend 중 하나로 내려갈 수 있다.
 3. `hw.flow`는 PMF-specific activation semantics를 직접 표현하지 않는다.
-4. PMF-specific lowering은 `hw.flow -> PMF backend -> pmfIR/capsule`에서만 등장한다.
+4. PMF-specific lowering은 `hw.flow -> PMF backend -> pmfIR/morphform`에서만 등장한다.
 
 ### 8.3 hw.flow representative op class
 
@@ -510,7 +510,7 @@ enum class HwStructOpcode : uint16_t {
 2. pipeline/stage는 ordering과 steady-state intent를 드러내야 한다.
 3. window/buffer 표현은 direct structural memory macro보다 locality/residency 친화 의미를 우선한다.
 4. service cooperation은 direct host call보다 endpoint/bridge 계약을 우선한다.
-5. `hw.flow`는 PMF 전용이 아니므로 capsule/context/pin/evict 같은 개념을 직접 갖지 않는다.
+5. `hw.flow`는 PMF 전용이 아니므로 morphform/context/pin/evict 같은 개념을 직접 갖지 않는다.
 
 ## 9. bridgeOIR
 
@@ -543,7 +543,7 @@ enum class BridgeOpcode : uint16_t {
 4. `ServiceReq`와 `ServiceReply`는 등록된 `GService`를 참조해야 한다.
 5. copy op는 source/destination layout profile과 residency를 함께 검사한다.
 6. async bridge op는 반드시 `token/event`를 생성하거나 소비해야 한다.
-7. PMF capsule activation 세부는 이 family의 canonical 범위 밖이다.
+7. PMF morphform activation 세부는 이 family의 canonical 범위 밖이다.
 
 ## 10. future family reserve
 

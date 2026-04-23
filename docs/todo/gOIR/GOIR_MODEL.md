@@ -361,7 +361,7 @@ struct GValue {
 
 1. 기존 CIRCT/Verilog/FPGA/ASIC flow와 자연스럽게 이어진다.
 2. 구조를 드러내는 HW subset의 기준점이 된다.
-3. PMF-specific activation, capsule, residency 의미는 여기 넣지 않는다.
+3. PMF-specific activation, Morphform, residency 의미는 여기 넣지 않는다.
 
 ### 6.5 hw.flow
 
@@ -394,7 +394,7 @@ interop/placement/runtime boundary 계약층이다.
 
 비범위:
 
-1. PMF capsule activation 모델
+1. PMF morphform activation 모델
 2. PMF context bank 운영 세부
 3. PMF warm/cold activation 세부
 
@@ -613,7 +613,7 @@ AST
 3. `gpuOIR` -> `gpu/spirv` 또는 backend-specific GPU lowering lane
 4. `hw.struct` -> CIRCT `hw/comb/seq/sv` 또는 동등 structural lane -> Verilog -> FPGA/ASIC
 5. `hw.flow` -> overlay IR / CGRA-like backend / future spatial backend
-6. `hw.flow` -> PMF backend -> `pmfIR/capsule`
+6. `hw.flow` -> PMF backend -> `pmfIR/morphform`
 7. `bridgeOIR` -> runtime/async/token/resource/service dialect
 
 ### 9.7 legacy lane

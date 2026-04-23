@@ -38,9 +38,13 @@ namespace parusc::cli {
         bool ast_dump = false;
         bool sir_dump = false;
         bool oir_dump = false;
+        bool goir_dump = false;
+        bool goir_placed_dump = false;
 
         bool emit_llvm_ir = false;
         bool emit_object = false;
+        bool emit_goir_mlir = false;
+        bool emit_goir_llvm_ir = false;
     };
 
     /// @brief bundle-aware compile context for LEI orchestration.

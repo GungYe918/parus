@@ -237,6 +237,56 @@ namespace {
         return ok;
     }
 
+    static bool test_goir_internal_flags_parse_() {
+        const auto opt = parse_({
+            "-Xparus",
+            "-goir-dump",
+            "-Xparus",
+            "-goir-placed-dump",
+            "-Xparus",
+            "-emit-goir-mlir",
+            "main.pr",
+        });
+
+        bool ok = true;
+        ok &= require_(opt.ok, "gOIR internal flags must parse");
+        ok &= require_(opt.has_xparus, "-Xparus must be recorded");
+        ok &= require_(opt.internal.goir_dump, "-goir-dump must set the open dump flag");
+        ok &= require_(opt.internal.goir_placed_dump, "-goir-placed-dump must set the placed dump flag");
+        ok &= require_(opt.internal.emit_goir_mlir, "-emit-goir-mlir must set the MLIR emit flag");
+        ok &= require_(opt.output_path == "a.mlir", "gOIR MLIR emit mode must default output to a.mlir");
+        return ok;
+    }
+
+    static bool test_goir_emit_llvm_ir_parse_() {
+        const auto opt = parse_({
+            "-Xparus",
+            "-emit-goir-llvm-ir",
+            "main.pr",
+        });
+
+        bool ok = true;
+        ok &= require_(opt.ok, "gOIR LLVM IR emit flag must parse");
+        ok &= require_(opt.internal.emit_goir_llvm_ir, "-emit-goir-llvm-ir must set the LLVM IR emit flag");
+        ok &= require_(opt.output_path == "a.ll", "gOIR LLVM IR emit mode must default output to a.ll");
+        return ok;
+    }
+
+    static bool test_goir_emit_conflicts_with_syntax_only_() {
+        const auto opt = parse_({
+            "-fsyntax-only",
+            "-Xparus",
+            "-emit-goir-mlir",
+            "main.pr",
+        });
+
+        bool ok = true;
+        ok &= require_(!opt.ok, "gOIR emit flags must conflict with -fsyntax-only");
+        ok &= require_(opt.error.find("cannot be combined") != std::string::npos,
+                       "gOIR emit conflict must explain the syntax-only restriction");
+        return ok;
+    }
+
 } // namespace
 
 int main() {
@@ -256,6 +306,9 @@ int main() {
         {"cimport_include_option_missing_path", test_cimport_include_option_missing_path_},
         {"cimport_preprocess_options_parse", test_cimport_preprocess_options_parse_},
         {"cimport_preprocess_option_missing_path", test_cimport_preprocess_option_missing_path_},
+        {"goir_internal_flags_parse", test_goir_internal_flags_parse_},
+        {"goir_emit_llvm_ir_parse", test_goir_emit_llvm_ir_parse_},
+        {"goir_emit_conflicts_with_syntax_only", test_goir_emit_conflicts_with_syntax_only_},
     };
 
     int failed = 0;
