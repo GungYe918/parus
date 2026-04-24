@@ -20,4 +20,11 @@ namespace parus::backend::aot::detail {
         const CompileOptions& opt
     );
 
+    /// @brief LLVM 22 lane AOT 컴파일 엔트리.
+    CompileResult compile_llvm_lane_v22(
+        const parus::oir::Module& oir,
+        const parus::ty::TypePool& types,
+        const CompileOptions& opt
+    );
+
 } // namespace parus::backend::aot::detail

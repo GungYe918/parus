@@ -4,10 +4,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_TYPE="Debug"
 PREFIX="${PARUS_INSTALL_PREFIX:-$HOME/.local}"
+WITH_MLIR=0
+MLIR_VERSION="${PARUS_MLIR_RELEASE_VERSION:-22.1.4}"
+MLIR_RELEASE_MODE="${PARUS_MLIR_RELEASE_MODE:-binary}"
+MLIR_TOOLCHAIN_ROOT="${PARUS_MLIR_TOOLCHAIN_ROOT:-}"
 
 usage() {
   cat <<'EOF'
-Usage: ./install.sh [--build-type <Debug|Release>] [--prefix <path>]
+Usage: ./install.sh [--build-type <Debug|Release>] [--prefix <path>] [--with-mlir] [--mlir-version <22.1.4>] [--mlir-release-mode <binary|source>]
 
 This script performs:
   1) ./run.sh (build + tests)
@@ -16,6 +20,9 @@ This script performs:
 Defaults:
   --build-type Debug
   --prefix $HOME/.local
+  MLIR disabled unless --with-mlir is passed
+  --mlir-version 22.1.4
+  --mlir-release-mode binary
 EOF
 }
 
@@ -37,6 +44,26 @@ while (($# > 0)); do
       PREFIX="$2"
       shift 2
       ;;
+    --with-mlir)
+      WITH_MLIR=1
+      shift
+      ;;
+    --mlir-version)
+      if (($# < 2)); then
+        echo "install.sh: --mlir-version requires a value" >&2
+        exit 1
+      fi
+      MLIR_VERSION="$2"
+      shift 2
+      ;;
+    --mlir-release-mode)
+      if (($# < 2)); then
+        echo "install.sh: --mlir-release-mode requires a value" >&2
+        exit 1
+      fi
+      MLIR_RELEASE_MODE="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -52,6 +79,24 @@ done
 if [ ! -x "${ROOT_DIR}/run.sh" ]; then
   echo "install.sh: run.sh not found or not executable" >&2
   exit 1
+fi
+
+if [ "${MLIR_RELEASE_MODE}" != "binary" ] && [ "${MLIR_RELEASE_MODE}" != "source" ]; then
+  echo "install.sh: --mlir-release-mode must be binary or source" >&2
+  exit 1
+fi
+
+if [ "${WITH_MLIR}" -eq 1 ]; then
+  export PARUS_ENABLE_MLIR=ON
+  export PARUS_LLVM_VERSION=22
+  export PARUS_MLIR_VERSION=22
+  export PARUS_MLIR_RELEASE_VERSION="${MLIR_VERSION}"
+  export PARUS_ENABLE_CIMPORT="${PARUS_ENABLE_CIMPORT:-OFF}"
+  if [ -z "${MLIR_TOOLCHAIN_ROOT}" ]; then
+    MLIR_TOOLCHAIN_ROOT="$("${ROOT_DIR}/scripts/fetch-llvm-mlir-toolchain.sh" --release "${MLIR_VERSION}" --mode "${MLIR_RELEASE_MODE}" | tail -n 1)"
+  fi
+  export PARUS_MLIR_TOOLCHAIN_ROOT="${MLIR_TOOLCHAIN_ROOT}"
+  export PARUS_LLVM_CONFIG_EXECUTABLE="${MLIR_TOOLCHAIN_ROOT}/bin/llvm-config"
 fi
 
 echo "[install] build + test via ./run.sh ${BUILD_TYPE}"
@@ -133,11 +178,18 @@ if [ -z "${LLVM_CONFIG_BIN}" ]; then
       "/usr/local/opt/llvm@20/bin/llvm-config"
       "llvm-config"
     )
-  else
+  elif [ "${LLVM_LANE}" = "21" ]; then
     CANDIDATES=(
       "/opt/homebrew/opt/llvm/bin/llvm-config"
       "/opt/homebrew/opt/llvm@21/bin/llvm-config"
       "/usr/local/opt/llvm@21/bin/llvm-config"
+      "llvm-config"
+    )
+  else
+    CANDIDATES=(
+      "/opt/homebrew/opt/llvm/bin/llvm-config"
+      "/opt/homebrew/opt/llvm@22/bin/llvm-config"
+      "/usr/local/opt/llvm@22/bin/llvm-config"
       "llvm-config"
     )
   fi

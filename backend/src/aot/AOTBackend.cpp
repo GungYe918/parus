@@ -20,7 +20,9 @@ namespace parus::backend::aot {
     ) {
 #if PARUS_AOT_ENABLE_LLVM
         if (opt.aot_engine == AOTEngine::kLlvm) {
-#if PARUS_LLVM_SELECTED_MAJOR == 21
+#if PARUS_LLVM_SELECTED_MAJOR == 22
+            return detail::compile_llvm_lane_v22(oir, types, opt);
+#elif PARUS_LLVM_SELECTED_MAJOR == 21
             return detail::compile_llvm_lane_v21(oir, types, opt);
 #elif PARUS_LLVM_SELECTED_MAJOR == 20
             return detail::compile_llvm_lane_v20(oir, types, opt);
@@ -29,7 +31,7 @@ namespace parus::backend::aot {
             r.ok = false;
             r.messages.push_back(CompileMessage{
                 true,
-                "Unsupported PARUS_LLVM_SELECTED_MAJOR. Expected 20 or 21."
+                "Unsupported PARUS_LLVM_SELECTED_MAJOR. Expected 20, 21, or 22."
             });
             return r;
 #endif

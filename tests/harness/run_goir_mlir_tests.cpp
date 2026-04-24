@@ -13,6 +13,10 @@
 #include <iostream>
 #include <string>
 
+#ifndef PARUS_TEST_MLIR_LANE
+#define PARUS_TEST_MLIR_LANE 22
+#endif
+
 namespace {
 
     struct ParsedProgram {
@@ -158,7 +162,7 @@ namespace {
         auto llvm_ir = parus::backend::mlir::lower_goir_to_llvm_ir_text(
             placed,
             types,
-            parus::backend::mlir::GOIRLoweringOptions{.llvm_lane_major = 20}
+            parus::backend::mlir::GOIRLoweringOptions{.llvm_lane_major = PARUS_TEST_MLIR_LANE}
         );
         ok &= require_(llvm_ir.ok, "gOIR placed module must lower to LLVM IR text");
         ok &= require_(llvm_ir.messages.empty(), "LLVM IR lowering must not emit diagnostics");

@@ -18,6 +18,10 @@ if(PARUS_ENABLE_AOT_BACKEND AND PARUS_AOT_ENABLE_LLVM)
     add_subdirectory(llvmconfig)
 endif()
 
+if(PARUS_ENABLE_MLIR)
+    include(${CMAKE_SOURCE_DIR}/cmake/ParusMLIRToolchain.cmake)
+endif()
+
 if(PARUS_ENABLE_AOT_BACKEND)
     add_subdirectory(src/aot)
 endif()

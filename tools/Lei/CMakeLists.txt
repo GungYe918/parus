@@ -18,6 +18,26 @@ else()
     endif()
 endif()
 
+if(APPLE AND DEFINED PARUS_ENABLE_MLIR AND PARUS_ENABLE_MLIR
+   AND DEFINED PARUS_LLVM_VERSION AND PARUS_LLVM_VERSION STREQUAL "22")
+    set_property(DIRECTORY PROPERTY LINK_LIBRARIES "")
+    set_property(DIRECTORY PROPERTY LINK_OPTIONS "")
+    execute_process(
+        COMMAND xcrun --show-sdk-path
+        OUTPUT_VARIABLE _lei_apple_sdk_root
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    set(_lei_apple_libcxx_include "${_lei_apple_sdk_root}/usr/include/c++/v1")
+    if(EXISTS "${_lei_apple_libcxx_include}")
+        add_compile_options(
+            -nostdinc++
+            -isystem
+            "${_lei_apple_libcxx_include}"
+        )
+    endif()
+endif()
+
 add_library(lei_core
     src/lex/lexer.cpp
     src/text/utf8.cpp

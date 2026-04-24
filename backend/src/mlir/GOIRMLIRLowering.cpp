@@ -19,9 +19,12 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/Support/raw_ostream.h>
 
-#include <sstream>
 #include <string>
 #include <unordered_map>
+
+#ifndef PARUS_MLIR_SELECTED_MAJOR
+#define PARUS_MLIR_SELECTED_MAJOR 22
+#endif
 
 namespace parus::backend::mlir {
 
@@ -174,7 +177,8 @@ namespace parus::backend::mlir {
                 for (const auto& err : verrs) push_error_(out.messages, err.msg);
                 if (!out.messages.empty()) return out;
 
-                std::ostringstream os{};
+                std::string mlir_text{};
+                llvm::raw_string_ostream os(mlir_text);
                 os << "module {\n";
                 for (size_t i = 0; i < module_.realizations.size(); ++i) {
                     const auto& real = module_.realizations[i];
@@ -187,10 +191,11 @@ namespace parus::backend::mlir {
                     emit_realization_(os, static_cast<parus::goir::RealizationId>(i), real);
                 }
                 os << "}\n";
+                os.flush();
 
                 if (!out.messages.empty()) return out;
                 out.ok = true;
-                out.mlir_text = os.str();
+                out.mlir_text = std::move(mlir_text);
                 return out;
             }
 
@@ -237,7 +242,7 @@ namespace parus::backend::mlir {
                 return builtin.has_value() && is_signed_builtin_(*builtin);
             }
 
-            std::string const_zero_(std::ostringstream& os, parus::ty::TypeId ty) {
+            std::string const_zero_(llvm::raw_ostream& os, parus::ty::TypeId ty) {
                 const auto mlir_ty = mlir_type_(types_, ty);
                 const auto name = make_temp_();
                 if (is_float_(ty)) {
@@ -248,20 +253,20 @@ namespace parus::backend::mlir {
                 return name;
             }
 
-            std::string const_all_ones_(std::ostringstream& os, parus::ty::TypeId ty) {
+            std::string const_all_ones_(llvm::raw_ostream& os, parus::ty::TypeId ty) {
                 const auto mlir_ty = mlir_type_(types_, ty);
                 const auto name = make_temp_();
                 os << "    " << name << " = arith.constant -1 : " << *mlir_ty << "\n";
                 return name;
             }
 
-            std::string const_bool_(std::ostringstream& os, bool value) {
+            std::string const_bool_(llvm::raw_ostream& os, bool value) {
                 const auto name = make_temp_();
                 os << "    " << name << " = arith.constant " << (value ? "true" : "false") << " : i1\n";
                 return name;
             }
 
-            void emit_inst_(std::ostringstream& os, const parus::goir::Inst& inst) {
+            void emit_inst_(llvm::raw_ostream& os, const parus::goir::Inst& inst) {
                 std::visit([&](const auto& data) {
                     using T = std::decay_t<decltype(data)>;
                     if constexpr (std::is_same_v<T, parus::goir::OpConstInt>) {
@@ -468,16 +473,16 @@ namespace parus::backend::mlir {
                         const auto& callee = module_.realizations[data.callee];
                         const auto sig_id = module_.computations[callee.computation].sig;
                         const auto& sig = module_.semantic_sigs[sig_id];
-                        std::ostringstream args{};
-                        std::ostringstream arg_types{};
+                        std::string args{};
+                        std::string arg_types{};
                         for (size_t i = 0; i < data.args.size(); ++i) {
                             if (i != 0) {
-                                args << ", ";
-                                arg_types << ", ";
+                                args += ", ";
+                                arg_types += ", ";
                             }
-                            args << value_name_(data.args[i]);
+                            args += value_name_(data.args[i]);
                             const auto mlir_ty = mlir_type_(types_, module_.values[data.args[i]].ty);
-                            arg_types << (mlir_ty.has_value() ? *mlir_ty : "<invalid>");
+                            arg_types += (mlir_ty.has_value() ? *mlir_ty : "<invalid>");
                         }
                         const auto result_ty = mlir_type_(types_, sig.result_type);
                         if (!result_ty.has_value()) {
@@ -489,15 +494,15 @@ namespace parus::backend::mlir {
                         } else {
                             os << "    ";
                         }
-                        os << "func.call @" << module_.string(callee.name) << "(" << args.str() << ") : ("
-                           << arg_types.str() << ") -> " << *result_ty << "\n";
+                        os << "func.call @" << module_.string(callee.name) << "(" << args << ") : ("
+                           << arg_types << ") -> " << *result_ty << "\n";
                     } else if constexpr (std::is_same_v<T, parus::goir::OpSemanticInvoke>) {
                         fail_("placed MLIR lowering cannot see semantic invokes");
                     }
                 }, inst.data);
             }
 
-            void emit_block_term_(std::ostringstream& os, const parus::goir::Block& block) {
+            void emit_block_term_(llvm::raw_ostream& os, const parus::goir::Block& block) {
                 std::visit([&](const auto& term) {
                     using T = std::decay_t<decltype(term)>;
                     if constexpr (std::is_same_v<T, parus::goir::TermBr>) {
@@ -516,7 +521,7 @@ namespace parus::backend::mlir {
                 }, block.term);
             }
 
-            void emit_realization_(std::ostringstream& os,
+            void emit_realization_(llvm::raw_ostream& os,
                                    parus::goir::RealizationId rid,
                                    const parus::goir::GRealization& real) {
                 const auto sig_id = module_.computations[real.computation].sig;
@@ -605,8 +610,8 @@ namespace parus::backend::mlir {
     ) {
         GOIRLLVMIRResult out{};
 
-        if (options.llvm_lane_major != 20) {
-            push_error_(out.messages, "gOIR MLIR lowering requires LLVM lane 20 in this milestone.");
+        if (options.llvm_lane_major != PARUS_MLIR_SELECTED_MAJOR) {
+            push_error_(out.messages, "gOIR MLIR lowering requires LLVM/MLIR lane " + std::to_string(PARUS_MLIR_SELECTED_MAJOR) + ".");
             return out;
         }
 

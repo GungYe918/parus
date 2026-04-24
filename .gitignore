@@ -1,6 +1,7 @@
 build/
 build-mlir/
 build_dbg/
+.parus-toolchains/
 target/
 docs/memo/*
 .*/

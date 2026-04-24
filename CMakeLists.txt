@@ -37,14 +37,65 @@ option(PARUS_AOT_ENABLE_LLVM "Enable LLVM engine inside AOT backend" ON)
 option(PARUS_LLVM_USE_TOOLCHAIN "Use linked LLVM C++ API toolchain" ON)
 set(PARUS_LLVM_CONFIG_EXECUTABLE "" CACHE FILEPATH "Path to llvm-config executable for the selected LLVM lane")
 
-# LLVM lane fence: only 20 / 21 allowed
-set(PARUS_LLVM_VERSION "20" CACHE STRING "LLVM major version lane for AOT backend (20|21)")
-set_property(CACHE PARUS_LLVM_VERSION PROPERTY STRINGS 20 21)
+# LLVM lane fence: only 20 / 21 / 22 allowed.
+set(PARUS_LLVM_VERSION "20" CACHE STRING "LLVM major version lane for AOT backend (20|21|22)")
+set_property(CACHE PARUS_LLVM_VERSION PROPERTY STRINGS 20 21 22)
 option(PARUS_LLVM_REQUIRE_TOOLCHAIN "Require a matching LLVM toolchain for the selected LLVM backend version" OFF)
+set(PARUS_MLIR_VERSION "22" CACHE STRING "MLIR/LLVM major version lane for gOIR MLIR backend")
+set_property(CACHE PARUS_MLIR_VERSION PROPERTY STRINGS 22)
+set(PARUS_MLIR_RELEASE_VERSION "22.1.4" CACHE STRING "Official llvm-project release version for the MLIR lane")
+set(PARUS_MLIR_TOOLCHAIN_ROOT "" CACHE PATH "Root of the official LLVM/MLIR release toolchain for PARUS_ENABLE_MLIR")
 
-if(NOT PARUS_LLVM_VERSION STREQUAL "20" AND NOT PARUS_LLVM_VERSION STREQUAL "21")
+if(NOT PARUS_LLVM_VERSION STREQUAL "20" AND NOT PARUS_LLVM_VERSION STREQUAL "21" AND NOT PARUS_LLVM_VERSION STREQUAL "22")
     message(FATAL_ERROR
-    "Unsupported PARUS_LLVM_VERSION='${PARUS_LLVM_VERSION}'. Supported values are: 20, 21.")
+    "Unsupported PARUS_LLVM_VERSION='${PARUS_LLVM_VERSION}'. Supported values are: 20, 21, 22.")
+endif()
+
+if(NOT PARUS_MLIR_VERSION STREQUAL "22")
+    message(FATAL_ERROR
+    "Unsupported PARUS_MLIR_VERSION='${PARUS_MLIR_VERSION}'. Supported values are: 22.")
+endif()
+
+if(PARUS_ENABLE_MLIR AND NOT PARUS_LLVM_VERSION STREQUAL PARUS_MLIR_VERSION)
+    message(FATAL_ERROR
+    "PARUS_ENABLE_MLIR=ON requires PARUS_LLVM_VERSION == PARUS_MLIR_VERSION. "
+    "Got PARUS_LLVM_VERSION='${PARUS_LLVM_VERSION}', PARUS_MLIR_VERSION='${PARUS_MLIR_VERSION}'.")
+endif()
+
+if(APPLE AND PARUS_ENABLE_MLIR AND PARUS_LLVM_VERSION STREQUAL "22" AND PARUS_MLIR_TOOLCHAIN_ROOT)
+    execute_process(
+        COMMAND xcrun --show-sdk-path
+        OUTPUT_VARIABLE _parus_apple_sdk_root
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    set(_parus_apple_libcxx_include "${_parus_apple_sdk_root}/usr/include/c++/v1")
+    set(_parus_apple_libcxx_tbd "${_parus_apple_sdk_root}/usr/lib/libc++.tbd")
+    set(_parus_apple_libcxxabi_tbd "${_parus_apple_sdk_root}/usr/lib/libc++abi.tbd")
+    if(NOT EXISTS "${_parus_apple_libcxx_include}")
+        message(FATAL_ERROR
+            "PARUS_ENABLE_MLIR=ON with LLVM lane 22 on macOS requires Apple SDK libc++ headers. "
+            "Could not find '${_parus_apple_libcxx_include}'.")
+    endif()
+    if(NOT EXISTS "${_parus_apple_libcxx_tbd}" OR NOT EXISTS "${_parus_apple_libcxxabi_tbd}")
+        message(FATAL_ERROR
+            "PARUS_ENABLE_MLIR=ON with LLVM lane 22 on macOS requires Apple SDK libc++ link stubs under "
+            "'${_parus_apple_sdk_root}/usr/lib'.")
+    endif()
+    add_compile_options(
+        "$<$<COMPILE_LANGUAGE:CXX>:-nostdinc++>"
+        "$<$<COMPILE_LANGUAGE:CXX>:-isystem>"
+        "$<$<COMPILE_LANGUAGE:CXX>:${_parus_apple_libcxx_include}>"
+    )
+    add_library(parus_llvm22_darwin_compat OBJECT cmake/ParusLlvm22DarwinCompat.cpp)
+    set_target_properties(parus_llvm22_darwin_compat PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+    )
+    link_libraries(
+        $<TARGET_OBJECTS:parus_llvm22_darwin_compat>
+        "${_parus_apple_libcxx_tbd}"
+        "${_parus_apple_libcxxabi_tbd}"
+    )
 endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

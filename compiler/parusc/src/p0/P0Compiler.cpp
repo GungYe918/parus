@@ -7977,7 +7977,7 @@ namespace parusc::p0 {
                         goir_placed_res->mod,
                         types,
                         parus::backend::mlir::GOIRLoweringOptions{
-                            .llvm_lane_major = 20,
+                            .llvm_lane_major = PARUS_MLIR_SELECTED_MAJOR,
                         }
                     );
                     for (const auto& msg : lowered.messages) {

@@ -98,13 +98,14 @@ LLVM lane 선택/탐색/버전 가드는 `backend/llvmconfig`에만 둔다.
 
 - LLVM 20
 - LLVM 21
+- LLVM 22
 
-상위 CMake에서 `PARUS_LLVM_VERSION`은 **20/21만 허용**하며, 그 외 값은 configure 단계에서 즉시 실패한다.
+상위 CMake에서 `PARUS_LLVM_VERSION`은 **20/21/22만 허용**하며, 그 외 값은 configure 단계에서 즉시 실패한다.
 
 관련 옵션:
 
 - `PARUS_AOT_ENABLE_LLVM` : AOT 내부 LLVM 엔진 활성화
-- `PARUS_LLVM_VERSION` : `20` 또는 `21`
+- `PARUS_LLVM_VERSION` : `20`, `21`, 또는 `22`
 - `PARUS_LLVM_USE_TOOLCHAIN` : LLVM C++ API 링크 사용 여부(현재 실질적으로 `ON` 경로)
 - `PARUS_LLVM_REQUIRE_TOOLCHAIN` : 선택 lane의 LLVM toolchain 필수 여부
 - `PARUS_LLVM_CONFIG_EXECUTABLE` : lane에 맞는 `llvm-config` 실행 파일 경로(권장: 명시)
@@ -112,7 +113,7 @@ LLVM lane 선택/탐색/버전 가드는 `backend/llvmconfig`에만 둔다.
 권장 운영:
 
 - 기본 lane은 안정성이 높은 버전(예: 20)으로 고정
-- 차기 lane(예: 21)은 병행 검증 후 기본 lane 교체
+- MLIR 사용 시에는 `PARUS_LLVM_VERSION == PARUS_MLIR_VERSION == 22`를 강제해 한 바이너리에 서로 다른 LLVM major가 섞이지 않게 한다.
 
 ## 5) 빌드 흐름 요약
 
@@ -120,7 +121,7 @@ LLVM lane 선택/탐색/버전 가드는 `backend/llvmconfig`에만 둔다.
 2. `PARUS_ENABLE_AOT_BACKEND && PARUS_AOT_ENABLE_LLVM`일 때 `backend/llvmconfig` 포함
 3. `backend/src/aot`는 선택된 lane source를 링크
 4. AOT compile 경로에서 `PARUS_LLVM_SELECTED_MAJOR`에 따라 lane dispatch
-5. 선택 lane(v20/v21)에서 `LLVMIRLowering`을 통해 OIR을 LLVM-IR 텍스트로 lowering
+5. 선택 lane(v20/v21/v22)에서 `LLVMIRLowering`을 통해 OIR을 LLVM-IR 텍스트로 lowering
 6. `LLVMObjectEmission`이 `.o` 방출을 수행
    - `llvm-config --link-static --libfiles all --system-libs`를 기반으로 정적 링크
    - 외부 `clang -x ir -c` fallback은 사용하지 않음

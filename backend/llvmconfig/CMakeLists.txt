@@ -11,10 +11,12 @@ set(_parus_llvm_libfiles "")
 set(_parus_llvm_system_libs "")
 set(_parus_llvm_ldflags "")
 set(_parus_llvm_link_dirs "")
+set(_parus_llvm_cxx_runtime_libs "")
+set(_parus_llvm_cxx_runtime_link_opts "")
 
-if(NOT _parus_llvm_selected STREQUAL "20" AND NOT _parus_llvm_selected STREQUAL "21")
+if(NOT _parus_llvm_selected STREQUAL "20" AND NOT _parus_llvm_selected STREQUAL "21" AND NOT _parus_llvm_selected STREQUAL "22")
     message(FATAL_ERROR
-        "Unsupported PARUS_LLVM_VERSION='${_parus_llvm_selected}'. Supported values are: 20, 21.")
+        "Unsupported PARUS_LLVM_VERSION='${_parus_llvm_selected}'. Supported values are: 20, 21, 22.")
 endif()
 
 if(PARUS_LLVM_USE_TOOLCHAIN)
@@ -79,6 +81,15 @@ if(PARUS_LLVM_USE_TOOLCHAIN)
                 separate_arguments(_parus_llvm_system_libs UNIX_COMMAND "${_parus_llvm_system_libs_raw}")
                 separate_arguments(_parus_llvm_ldflags UNIX_COMMAND "${_parus_llvm_ldflags_raw}")
 
+                if(APPLE AND _parus_llvm_selected STREQUAL "22")
+                    # The official macOS LLVM 22 archive reports -lxml2 through
+                    # llvm-config. Apple's libxml2 can load system frameworks
+                    # that bring in /usr/lib/libc++, which is unsafe to mix with
+                    # the release archive's libc++ in one process.
+                    list(REMOVE_ITEM _parus_llvm_system_libs "-lxml2")
+                    list(REMOVE_ITEM _parus_llvm_system_libs "xml2")
+                endif()
+
                 if(_parus_llvm_lib_dir)
                     list(APPEND _parus_llvm_link_dirs "${_parus_llvm_lib_dir}")
                 endif()
@@ -121,6 +132,11 @@ if(PARUS_LLVM_USE_TOOLCHAIN)
                     list(APPEND _parus_llvm_ldflags "-L${_parus_link_dir}")
                 endforeach()
                 list(REMOVE_DUPLICATES _parus_llvm_ldflags)
+
+                # On macOS lane 22, Parus links against the Apple SDK libc++
+                # runtime and provides small ABI shims for symbols expected by
+                # the official LLVM archive. Do not link the archive's libc++:
+                # it currently trips typed-new initialization before main.
             else()
                 message(STATUS
                     "parus_llvmconfig: llvm-config major mismatch. selected lane=${_parus_llvm_selected}, "
@@ -160,8 +176,8 @@ target_compile_definitions(parus_llvmconfig
 if(_parus_llvm_toolchain_ok)
     target_include_directories(parus_llvmconfig SYSTEM INTERFACE "${_parus_llvm_include_dir}")
     target_link_directories(parus_llvmconfig INTERFACE ${_parus_llvm_link_dirs})
-    target_link_libraries(parus_llvmconfig INTERFACE ${_parus_llvm_libfiles} ${_parus_llvm_system_libs})
-    target_link_options(parus_llvmconfig INTERFACE ${_parus_llvm_ldflags})
+    target_link_libraries(parus_llvmconfig INTERFACE ${_parus_llvm_libfiles} ${_parus_llvm_system_libs} ${_parus_llvm_cxx_runtime_libs})
+    target_link_options(parus_llvmconfig INTERFACE ${_parus_llvm_ldflags} ${_parus_llvm_cxx_runtime_link_opts})
 endif()
 
 message(STATUS

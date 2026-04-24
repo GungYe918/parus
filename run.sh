@@ -11,9 +11,39 @@ if command -v ninja >/dev/null 2>&1; then
 fi
 
 LLVM_LANE="${PARUS_LLVM_VERSION:-20}"
-if [ "${LLVM_LANE}" != "20" ] && [ "${LLVM_LANE}" != "21" ]; then
-  echo "Unsupported PARUS_LLVM_VERSION='${LLVM_LANE}'. Supported lanes: 20, 21."
+if [ "${LLVM_LANE}" != "20" ] && [ "${LLVM_LANE}" != "21" ] && [ "${LLVM_LANE}" != "22" ]; then
+  echo "Unsupported PARUS_LLVM_VERSION='${LLVM_LANE}'. Supported lanes: 20, 21, 22."
   exit 1
+fi
+
+ENABLE_MLIR="${PARUS_ENABLE_MLIR:-OFF}"
+case "${ENABLE_MLIR}" in
+  1|ON|on|true|TRUE) ENABLE_MLIR="ON" ;;
+  *) ENABLE_MLIR="OFF" ;;
+esac
+MLIR_LANE="${PARUS_MLIR_VERSION:-22}"
+MLIR_RELEASE="${PARUS_MLIR_RELEASE_VERSION:-22.1.4}"
+MLIR_TOOLCHAIN_ROOT="${PARUS_MLIR_TOOLCHAIN_ROOT:-}"
+
+if [ "${ENABLE_MLIR}" = "ON" ]; then
+  if [ "${MLIR_LANE}" != "22" ]; then
+    echo "Unsupported PARUS_MLIR_VERSION='${MLIR_LANE}'. Supported MLIR lanes: 22."
+    exit 1
+  fi
+  if [ "${LLVM_LANE}" != "${MLIR_LANE}" ]; then
+    echo "PARUS_ENABLE_MLIR=ON requires PARUS_LLVM_VERSION == PARUS_MLIR_VERSION."
+    echo "  PARUS_LLVM_VERSION=${LLVM_LANE}"
+    echo "  PARUS_MLIR_VERSION=${MLIR_LANE}"
+    exit 1
+  fi
+  if [ -z "${MLIR_TOOLCHAIN_ROOT}" ]; then
+    MLIR_TOOLCHAIN_ROOT="$("${ROOT_DIR}/scripts/fetch-llvm-mlir-toolchain.sh" --release "${MLIR_RELEASE}" --mode binary | tail -n 1)"
+  fi
+  if [ ! -x "${MLIR_TOOLCHAIN_ROOT}/bin/llvm-config" ]; then
+    echo "PARUS_MLIR_TOOLCHAIN_ROOT does not contain bin/llvm-config: ${MLIR_TOOLCHAIN_ROOT}" >&2
+    exit 1
+  fi
+  PARUS_LLVM_CONFIG_EXECUTABLE="${MLIR_TOOLCHAIN_ROOT}/bin/llvm-config"
 fi
 
 llvm_major_of() {
@@ -48,11 +78,18 @@ if [ -z "${LLVM_CONFIG_BIN}" ]; then
       "/usr/local/opt/llvm@20/bin/llvm-config"
       "llvm-config"
     )
-  else
+  elif [ "${LLVM_LANE}" = "21" ]; then
     CANDIDATES=(
       "/opt/homebrew/opt/llvm/bin/llvm-config"
       "/opt/homebrew/opt/llvm@21/bin/llvm-config"
       "/usr/local/opt/llvm@21/bin/llvm-config"
+      "llvm-config"
+    )
+  else
+    CANDIDATES=(
+      "/opt/homebrew/opt/llvm/bin/llvm-config"
+      "/opt/homebrew/opt/llvm@22/bin/llvm-config"
+      "/usr/local/opt/llvm@22/bin/llvm-config"
       "llvm-config"
     )
   fi
@@ -101,7 +138,24 @@ export CXX="${CXX_COMPILER}"
 CMAKE_EXTRA_ARGS=(
   "-DCMAKE_PREFIX_PATH=${LLVM_PREFIX}"
   "-DPARUS_LLVM_CONFIG_EXECUTABLE=${LLVM_CONFIG_BIN}"
+  "-DPARUS_ENABLE_MLIR=${ENABLE_MLIR}"
+  "-DPARUS_MLIR_VERSION=${MLIR_LANE}"
+  "-DPARUS_MLIR_RELEASE_VERSION=${MLIR_RELEASE}"
 )
+
+if [ -n "${PARUS_ENABLE_CIMPORT:-}" ]; then
+  CMAKE_EXTRA_ARGS+=("-DPARUS_ENABLE_CIMPORT=${PARUS_ENABLE_CIMPORT}")
+elif [ "${ENABLE_MLIR}" = "ON" ] && [ "${LLVM_LANE}" = "22" ] && [ "$(uname -s)" = "Darwin" ]; then
+  CMAKE_EXTRA_ARGS+=("-DPARUS_ENABLE_CIMPORT=OFF")
+fi
+
+if [ "${ENABLE_MLIR}" = "ON" ]; then
+  CMAKE_EXTRA_ARGS+=(
+    "-DPARUS_MLIR_TOOLCHAIN_ROOT=${MLIR_TOOLCHAIN_ROOT}"
+    "-DMLIR_DIR=${MLIR_TOOLCHAIN_ROOT}/lib/cmake/mlir"
+    "-DLLVM_DIR=${MLIR_TOOLCHAIN_ROOT}/lib/cmake/llvm"
+  )
+fi
 
 HAS_LLD_LINKER=0
 HOST_OS="$(uname -s)"
@@ -195,6 +249,12 @@ echo ""
 echo "Built successfully (stage1 + stage2 + tests)."
 echo "LLVM lane            : ${LLVM_LANE}"
 echo "llvm-config          : ${LLVM_CONFIG_BIN}"
+echo "MLIR enabled         : ${ENABLE_MLIR}"
+if [ "${ENABLE_MLIR}" = "ON" ]; then
+  echo "MLIR lane            : ${MLIR_LANE}"
+  echo "MLIR release         : ${MLIR_RELEASE}"
+  echo "MLIR toolchain root  : ${MLIR_TOOLCHAIN_ROOT}"
+fi
 echo "C compiler           : ${C_COMPILER}"
 echo "CXX compiler         : ${CXX_COMPILER}"
 echo "LLVM toolchain mode  : ${LLVM_USE_TOOLCHAIN} (required=${LLVM_REQUIRE_TOOLCHAIN})"

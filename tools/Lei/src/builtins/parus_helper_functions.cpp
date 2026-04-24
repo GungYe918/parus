@@ -166,7 +166,7 @@ bool aot_engine_enabled_impl(std::string_view name) {
 }
 
 bool llvm_lane_supported_impl(int64_t lane) {
-    return lane == 20 || lane == 21;
+    return lane == 20 || lane == 21 || lane == 22;
 }
 
 std::optional<std::string> find_tool_path(std::string_view name) {
