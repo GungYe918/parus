@@ -4,6 +4,23 @@
 
 namespace parus::goir {
 
+    namespace {
+
+        bool supports_layout_(LayoutClass layout) {
+            switch (layout) {
+                case LayoutClass::Scalar:
+                case LayoutClass::FixedArray:
+                case LayoutClass::SliceView:
+                case LayoutClass::PlainRecord:
+                    return true;
+                case LayoutClass::Unknown:
+                    return false;
+            }
+            return false;
+        }
+
+    } // namespace
+
     PlacementResult place_module(const Module& open_module) {
         PlacementResult out{};
 
@@ -50,7 +67,29 @@ namespace parus::goir {
         for (const auto& value : out.mod.values) {
             if (value.ownership.kind != OwnershipKind::Plain) {
                 out.messages.push_back(Message{
-                    "M0 placement rejects ownership-sensitive gOIR values; runtime ownership lowering is not implemented yet."
+                    "M1 placement rejects ownership-sensitive gOIR values; runtime ownership lowering is not implemented yet."
+                });
+                return out;
+            }
+            if (value.layout == LayoutClass::Unknown && value.ty != kInvalidType) {
+                out.messages.push_back(Message{
+                    "placement found a value with unfrozen/unknown layout class in the supported CPU subset."
+                });
+                return out;
+            }
+            if (value.is_place && !supports_layout_(value.layout)) {
+                out.messages.push_back(Message{
+                    "placement found an unsupported place layout in the supported CPU subset."
+                });
+                return out;
+            }
+        }
+
+        for (const auto& inst : out.mod.insts) {
+            if (std::holds_alternative<OpBorrowView>(inst.data) ||
+                std::holds_alternative<OpEscapeView>(inst.data)) {
+                out.messages.push_back(Message{
+                    "M1 placement rejects ownership-sensitive borrow/escape markers; runtime ownership lowering is not implemented yet."
                 });
                 return out;
             }

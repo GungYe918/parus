@@ -104,6 +104,7 @@ namespace parus::goir {
 
             BuildResult build() {
                 mod_.header.stage_kind = StageKind::Open;
+                copy_record_layouts_();
 
                 discover_supported_funcs_();
                 if (!messages_.empty()) return finish_();
@@ -121,10 +122,18 @@ namespace parus::goir {
             }
 
         private:
+            struct Binding {
+                ValueId value = kInvalidId;
+                TypeId type = kInvalidType;
+                LayoutClass layout = LayoutClass::Unknown;
+                bool is_place = false;
+                bool is_mutable = false;
+            };
+
             struct FuncState {
                 RealizationId realization = kInvalidId;
                 BlockId current_block = kInvalidId;
-                std::unordered_map<parus::sir::SymbolId, ValueId> locals{};
+                std::unordered_map<parus::sir::SymbolId, Binding> locals{};
             };
 
             const parus::sir::Module& sir_;
@@ -132,11 +141,8 @@ namespace parus::goir {
             Module mod_{};
             std::vector<Message> messages_{};
             std::unordered_map<parus::sir::SymbolId, ComputationId> computation_by_sym_{};
-            std::unordered_map<parus::sir::SymbolId, RealizationId> realization_by_sym_{};
-            std::unordered_map<uint32_t, SemanticSigId> sig_by_func_index_{};
             std::unordered_map<uint32_t, ComputationId> computation_by_func_index_{};
             std::unordered_map<uint32_t, RealizationId> realization_by_func_index_{};
-            std::unordered_map<uint32_t, StringId> name_by_func_index_{};
             std::unordered_map<uint32_t, bool> supported_func_{};
 
             BuildResult finish_() {
@@ -151,26 +157,72 @@ namespace parus::goir {
                 messages_.push_back(Message{std::move(text)});
             }
 
-            bool is_supported_signature_(const parus::sir::Func& fn, uint32_t func_index) {
+            const RecordLayout* find_record_layout_(TypeId ty) const {
+                return mod_.find_record_layout(ty);
+            }
+
+            LayoutClass classify_layout_(TypeId ty) const {
+                if (ty == kInvalidType) return LayoutClass::Unknown;
+                const auto& t = types_.get(ty);
+                switch (t.kind) {
+                    case parus::ty::Kind::kBuiltin:
+                        return (t.builtin == parus::ty::Builtin::kUnit)
+                            ? LayoutClass::Scalar
+                            : (is_supported_scalar_type_(types_, ty) ? LayoutClass::Scalar : LayoutClass::Unknown);
+                    case parus::ty::Kind::kArray:
+                        return t.array_has_size ? LayoutClass::FixedArray : LayoutClass::SliceView;
+                    case parus::ty::Kind::kNamedUser:
+                        return find_record_layout_(ty) != nullptr ? LayoutClass::PlainRecord : LayoutClass::Unknown;
+                    default:
+                        return LayoutClass::Unknown;
+                }
+            }
+
+            bool is_supported_local_type_(TypeId ty) const {
+                const auto layout = classify_layout_(ty);
+                return layout == LayoutClass::Scalar ||
+                       layout == LayoutClass::FixedArray ||
+                       layout == LayoutClass::SliceView ||
+                       layout == LayoutClass::PlainRecord;
+            }
+
+            void copy_record_layouts_() {
+                for (const auto& field : sir_.fields) {
+                    RecordLayout layout{};
+                    layout.self_type = field.self_type;
+                    const uint64_t begin = field.member_begin;
+                    const uint64_t end = begin + field.member_count;
+                    if (begin > sir_.field_members.size() || end > sir_.field_members.size()) continue;
+                    for (uint32_t i = field.member_begin; i < field.member_begin + field.member_count; ++i) {
+                        const auto& member = sir_.field_members[i];
+                        layout.fields.push_back(RecordField{
+                            .name = mod_.add_string(std::string(member.name)),
+                            .type = member.type,
+                        });
+                    }
+                    mod_.add_record_layout(layout);
+                }
+            }
+
+            bool is_supported_signature_(const parus::sir::Func& fn) {
                 if (fn.is_extern || fn.is_throwing || fn.abi != parus::sir::FuncAbi::kParus ||
                     fn.is_actor_member || fn.is_actor_init || fn.is_acts_member) {
-                    push_error_("gOIR M0 does not support function '" + std::string(fn.name) +
+                    push_error_("gOIR M1 does not support function '" + std::string(fn.name) +
                                 "' in the official lane because it is not a pure internal CPU entry.");
                     return false;
                 }
                 if (!is_supported_scalar_type_(types_, fn.ret) && !is_unit_type_(types_, fn.ret)) {
-                    push_error_("gOIR M0 does not support return type of function '" + std::string(fn.name) + "'.");
+                    push_error_("gOIR M1 does not support return type of function '" + std::string(fn.name) + "'.");
                     return false;
                 }
                 for (uint32_t i = 0; i < fn.param_count; ++i) {
                     const auto& param = sir_.params[fn.param_begin + i];
                     if (!is_supported_scalar_type_(types_, param.type)) {
-                        push_error_("gOIR M0 does not support parameter type of function '" +
+                        push_error_("gOIR M1 does not support parameter type of function '" +
                                     std::string(fn.name) + "'.");
                         return false;
                     }
                 }
-                (void)func_index;
                 return true;
             }
 
@@ -179,14 +231,13 @@ namespace parus::goir {
                     const auto& fn = sir_.funcs[i];
                     const bool is_pure = fn.is_pure || has_attr_(sir_, fn, "pure");
                     if (!is_pure) {
-                        push_error_("gOIR M0 requires pure functions (currently expressed as SIR purity or @pure); unsupported function '" +
+                        push_error_("gOIR M1 requires pure functions; unsupported function '" +
                                     std::string(fn.name) + "'.");
                         continue;
                     }
-                    if (!is_supported_signature_(fn, i)) continue;
+                    if (!is_supported_signature_(fn)) continue;
 
                     const auto name = mod_.add_string(std::string(fn.name));
-                    name_by_func_index_[i] = name;
 
                     SemanticSig sig{};
                     sig.name = name;
@@ -197,7 +248,6 @@ namespace parus::goir {
                         sig.param_types.push_back(sir_.params[fn.param_begin + pi].type);
                     }
                     const auto sig_id = mod_.add_semantic_sig(sig);
-                    sig_by_func_index_[i] = sig_id;
 
                     const auto policy_id = mod_.add_placement_policy(GPlacementPolicy{});
 
@@ -222,16 +272,16 @@ namespace parus::goir {
 
                     mod_.computations[comp_id].realizations.push_back(real_id);
                     computation_by_sym_[fn.sym] = comp_id;
-                    realization_by_sym_[fn.sym] = real_id;
                     supported_func_[i] = true;
                 }
             }
 
-            ValueId add_block_param_(BlockId bb, TypeId ty, OwnershipInfo ownership = {}) {
+            ValueId add_block_param_(BlockId bb, TypeId ty) {
                 Value value{};
                 value.ty = ty;
+                value.place_elem_type = ty;
                 value.eff = Effect::Pure;
-                value.ownership = ownership;
+                value.layout = classify_layout_(ty);
                 value.def_a = bb;
                 value.def_b = static_cast<uint32_t>(mod_.blocks[bb].params.size());
                 const auto vid = mod_.add_value(value);
@@ -239,14 +289,27 @@ namespace parus::goir {
                 return vid;
             }
 
-            ValueId emit_inst_(FuncState& state, TypeId result_ty, Effect eff, OpData data,
-                               OwnershipInfo ownership = {}) {
+            ValueId emit_inst_(FuncState& state,
+                               TypeId result_ty,
+                               Effect eff,
+                               OpData data,
+                               OwnershipInfo ownership = {},
+                               LayoutClass layout = LayoutClass::Unknown,
+                               bool is_place = false,
+                               TypeId place_elem_type = kInvalidType,
+                               PlaceKind place_kind = PlaceKind::None,
+                               bool is_mutable = false) {
                 ValueId result = kInvalidId;
-                if (result_ty != kInvalidType && !is_unit_type_(types_, result_ty)) {
+                if (result_ty != kInvalidType && (!is_unit_type_(types_, result_ty) || is_place)) {
                     Value value{};
                     value.ty = result_ty;
+                    value.place_elem_type = (place_elem_type == kInvalidType) ? result_ty : place_elem_type;
                     value.eff = eff;
                     value.ownership = ownership;
+                    value.layout = (layout == LayoutClass::Unknown) ? classify_layout_(result_ty) : layout;
+                    value.place_kind = place_kind;
+                    value.is_place = is_place;
+                    value.is_mutable = is_mutable;
                     value.def_a = static_cast<uint32_t>(mod_.insts.size());
                     result = mod_.add_value(value);
                 }
@@ -269,6 +332,123 @@ namespace parus::goir {
                 block.has_term = true;
             }
 
+            std::optional<Binding> lookup_binding_(const FuncState& state, parus::sir::SymbolId sym) const {
+                const auto it = state.locals.find(sym);
+                if (it == state.locals.end()) return std::nullopt;
+                return it->second;
+            }
+
+            TypeId lookup_record_field_type_(TypeId record_ty, std::string_view field_name) const {
+                const auto* layout = find_record_layout_(record_ty);
+                if (layout == nullptr) return kInvalidType;
+                for (const auto& field : layout->fields) {
+                    if (mod_.string(field.name) == field_name) return field.type;
+                }
+                return kInvalidType;
+            }
+
+            bool looks_like_supported_range_value_(parus::sir::ValueId sid) const {
+                if (sid == parus::sir::k_invalid_value || static_cast<size_t>(sid) >= sir_.values.size()) return false;
+                const auto& v = sir_.values[sid];
+                if (v.kind != ValueKind::kFieldInit) return false;
+                if (v.type == parus::sir::k_invalid_type) return false;
+                const auto& t = types_.get(v.type);
+                if (t.kind != parus::ty::Kind::kNamedUser) return false;
+                std::vector<std::string_view> path{};
+                std::vector<TypeId> args{};
+                if (!types_.decompose_named_user(v.type, path, args) || path.empty()) return false;
+                const auto leaf = path.back();
+                return leaf == "Range" || leaf == "RangeInclusive";
+            }
+
+            ValueId lower_place_(FuncState& state, parus::sir::ValueId sid) {
+                if (sid == parus::sir::k_invalid_value || static_cast<size_t>(sid) >= sir_.values.size()) {
+                    push_error_("gOIR builder saw invalid SIR place id.");
+                    return kInvalidId;
+                }
+                const auto& value = sir_.values[sid];
+                switch (value.kind) {
+                    case ValueKind::kLocal: {
+                        const auto binding = lookup_binding_(state, value.sym);
+                        if (!binding.has_value()) {
+                            push_error_("gOIR builder could not resolve local symbol in SIR place.");
+                            return kInvalidId;
+                        }
+                        if (!binding->is_place) {
+                            push_error_("gOIR M1 cannot take a mutable place from immutable scalar binding.");
+                            return kInvalidId;
+                        }
+                        return binding->value;
+                    }
+                    case ValueKind::kField: {
+                        const auto base = lower_place_(state, value.a);
+                        if (base == kInvalidId) return kInvalidId;
+                        const auto field_ty =
+                            (value.place_elem_type != parus::sir::k_invalid_type) ? value.place_elem_type : value.type;
+                        return emit_inst_(
+                            state,
+                            value.type,
+                            Effect::Pure,
+                            OpFieldPlace{.base = base, .field_name = mod_.add_string(std::string(value.text))},
+                            {},
+                            classify_layout_(field_ty),
+                            true,
+                            field_ty,
+                            PlaceKind::FieldPath,
+                            true
+                        );
+                    }
+                    case ValueKind::kIndex: {
+                        if (looks_like_supported_range_value_(value.b)) {
+                            push_error_("gOIR M1 keeps range subview outside the SIR builder slice; use the MLIR subset tests for subview coverage.");
+                            return kInvalidId;
+                        }
+                        const auto base = lower_place_(state, value.a);
+                        const auto index = lower_value_(state, value.b);
+                        if (base == kInvalidId || index == kInvalidId) return kInvalidId;
+                        const auto elem_ty =
+                            (value.place_elem_type != parus::sir::k_invalid_type) ? value.place_elem_type : value.type;
+                        return emit_inst_(
+                            state,
+                            value.type,
+                            Effect::Pure,
+                            OpIndexPlace{.base = base, .index = index},
+                            {},
+                            classify_layout_(elem_ty),
+                            true,
+                            elem_ty,
+                            PlaceKind::IndexPath,
+                            true
+                        );
+                    }
+                    default:
+                        push_error_("gOIR M1 encountered an unsupported SIR place form.");
+                        return kInvalidId;
+                }
+            }
+
+            ValueId lower_record_make_(FuncState& state, const parus::sir::Value& value) {
+                if (find_record_layout_(value.type) == nullptr) {
+                    push_error_("gOIR M1 field initializer requires a plain internal record layout.");
+                    return kInvalidId;
+                }
+                OpRecordMake make{};
+                const uint64_t arg_end = static_cast<uint64_t>(value.arg_begin) + static_cast<uint64_t>(value.arg_count);
+                if (arg_end > sir_.args.size()) {
+                    push_error_("gOIR builder saw invalid field-init arg slice.");
+                    return kInvalidId;
+                }
+                for (uint32_t i = 0; i < value.arg_count; ++i) {
+                    const auto& arg = sir_.args[value.arg_begin + i];
+                    if (arg.is_hole || arg.value == parus::sir::k_invalid_value || !arg.has_label) continue;
+                    make.fields.push_back(RecordValueField{
+                        .name = mod_.add_string(std::string(arg.label)),
+                        .value = lower_value_(state, arg.value),
+                    });
+                }
+                return emit_inst_(state, value.type, Effect::Pure, std::move(make), {}, LayoutClass::PlainRecord);
+            }
+
             ValueId lower_value_(FuncState& state, parus::sir::ValueId sid) {
                 if (sid == parus::sir::k_invalid_value || static_cast<size_t>(sid) >= sir_.values.size()) {
                     push_error_("gOIR builder saw invalid SIR value id.");
@@ -286,18 +466,29 @@ namespace parus::goir {
                     case ValueKind::kNullLit:
                         return emit_inst_(state, value.type, Effect::Pure, OpConstNull{});
                     case ValueKind::kLocal: {
-                        const auto it = state.locals.find(value.sym);
-                        if (it == state.locals.end()) {
+                        const auto binding = lookup_binding_(state, value.sym);
+                        if (!binding.has_value()) {
                             push_error_("gOIR builder could not resolve local symbol in SIR.");
                             return kInvalidId;
                         }
-                        return it->second;
+                        if (!binding->is_place) return binding->value;
+                        if (binding->layout == LayoutClass::Scalar) {
+                            return emit_inst_(
+                                state,
+                                binding->type,
+                                Effect::MayRead,
+                                OpLoad{.place = binding->value},
+                                {},
+                                classify_layout_(binding->type)
+                            );
+                        }
+                        return binding->value;
                     }
                     case ValueKind::kUnary: {
                         const auto src = lower_value_(state, value.a);
                         const auto op = map_unop_(static_cast<TokenKind>(value.op));
                         if (!op.has_value()) {
-                            push_error_("unsupported unary operator in gOIR M0 builder.");
+                            push_error_("unsupported unary operator in gOIR M1 builder.");
                             return kInvalidId;
                         }
                         return emit_inst_(state, value.type, Effect::Pure, OpUnary{*op, src});
@@ -307,7 +498,7 @@ namespace parus::goir {
                         const auto rhs = lower_value_(state, value.b);
                         const auto op = map_binop_(static_cast<TokenKind>(value.op));
                         if (!op.has_value()) {
-                            push_error_("unsupported binary operator in gOIR M0 builder.");
+                            push_error_("unsupported binary operator in gOIR M1 builder.");
                             return kInvalidId;
                         }
                         return emit_inst_(state, value.type, Effect::Pure, OpBinary{*op, lhs, rhs});
@@ -316,7 +507,7 @@ namespace parus::goir {
                         const auto src = lower_value_(state, value.a);
                         const auto cast = map_cast_(value.op);
                         if (!cast.has_value()) {
-                            push_error_("unsupported cast operator in gOIR M0 builder.");
+                            push_error_("unsupported cast operator in gOIR M1 builder.");
                             return kInvalidId;
                         }
                         return emit_inst_(state, value.type,
@@ -326,16 +517,16 @@ namespace parus::goir {
                     case ValueKind::kCall:
                     case ValueKind::kPipeCall: {
                         if (value.core_call_kind != parus::sir::CoreCallKind::kNone) {
-                            push_error_("gOIR M0 does not support core runtime helper calls yet.");
+                            push_error_("gOIR M1 does not support core runtime helper calls yet.");
                             return kInvalidId;
                         }
                         if (value.call_is_throwing || value.call_is_c_abi) {
-                            push_error_("gOIR M0 does not support throwing or C ABI calls.");
+                            push_error_("gOIR M1 does not support throwing or C ABI calls.");
                             return kInvalidId;
                         }
                         const auto cit = computation_by_sym_.find(value.callee_sym);
                         if (cit == computation_by_sym_.end()) {
-                            push_error_("gOIR M0 only supports direct pure/internal calls.");
+                            push_error_("gOIR M1 only supports direct pure/internal calls.");
                             return kInvalidId;
                         }
                         OpSemanticInvoke invoke{};
@@ -348,7 +539,7 @@ namespace parus::goir {
                             }
                             const auto& arg = sir_.args[aid];
                             if (arg.is_hole) {
-                                push_error_("gOIR M0 does not support hole arguments.");
+                                push_error_("gOIR M1 does not support hole arguments.");
                                 return kInvalidId;
                             }
                             invoke.args.push_back(lower_value_(state, arg.value));
@@ -357,10 +548,17 @@ namespace parus::goir {
                     }
                     case ValueKind::kBorrow: {
                         OwnershipInfo ownership{};
-                        ownership.kind = value.borrow_is_mut ? OwnershipKind::BorrowMut
-                                                             : OwnershipKind::BorrowShared;
+                        ownership.kind = value.borrow_is_mut ? OwnershipKind::BorrowMut : OwnershipKind::BorrowShared;
                         ownership.requires_runtime_lowering = true;
-                        return emit_inst_(state, value.type, Effect::Pure, OpConstNull{}, ownership);
+                        const auto place = lower_place_(state, value.a);
+                        return emit_inst_(
+                            state,
+                            value.type,
+                            Effect::Pure,
+                            OpBorrowView{.source_place = place},
+                            ownership,
+                            classify_layout_(value.type)
+                        );
                     }
                     case ValueKind::kEscape: {
                         OwnershipInfo ownership{};
@@ -374,10 +572,68 @@ namespace parus::goir {
                                 break;
                             }
                         }
-                        return emit_inst_(state, value.type, Effect::MayTrap, OpConstNull{}, ownership);
+                        const auto place = lower_place_(state, value.a);
+                        return emit_inst_(
+                            state,
+                            value.type,
+                            Effect::MayTrap,
+                            OpEscapeView{.source_place = place},
+                            ownership,
+                            classify_layout_(value.type)
+                        );
+                    }
+                    case ValueKind::kAssign: {
+                        const auto place = lower_place_(state, value.a);
+                        const auto rhs = lower_value_(state, value.b);
+                        if (place == kInvalidId || rhs == kInvalidId) return kInvalidId;
+                        emit_inst_(state, kInvalidType, Effect::MayWrite, OpStore{.place = place, .value = rhs});
+                        return rhs;
+                    }
+                    case ValueKind::kArrayLit: {
+                        OpArrayMake make{};
+                        const uint64_t arg_end = static_cast<uint64_t>(value.arg_begin) + static_cast<uint64_t>(value.arg_count);
+                        if (arg_end > sir_.args.size()) {
+                            push_error_("gOIR builder saw invalid array-literal arg slice.");
+                            return kInvalidId;
+                        }
+                        for (uint32_t i = 0; i < value.arg_count; ++i) {
+                            const auto& arg = sir_.args[value.arg_begin + i];
+                            if (arg.is_hole || arg.value == parus::sir::k_invalid_value) continue;
+                            make.elems.push_back(lower_value_(state, arg.value));
+                        }
+                        return emit_inst_(state, value.type, Effect::Pure, std::move(make), {}, LayoutClass::FixedArray);
+                    }
+                    case ValueKind::kFieldInit:
+                        return lower_record_make_(state, value);
+                    case ValueKind::kIndex: {
+                        if (looks_like_supported_range_value_(value.b)) {
+                            push_error_("gOIR M1 keeps range subview outside the SIR builder slice; use placed/manual tests for subview coverage.");
+                            return kInvalidId;
+                        }
+                        const auto place = lower_place_(state, sid);
+                        if (place == kInvalidId) return kInvalidId;
+                        return emit_inst_(state, value.type, Effect::MayRead, OpLoad{.place = place});
+                    }
+                    case ValueKind::kField: {
+                        const auto base = lower_value_(state, value.a);
+                        if (base == kInvalidId) return kInvalidId;
+                        if (value.text == "len") {
+                            const auto base_ty = sir_.values[value.a].type;
+                            if (base_ty != parus::sir::k_invalid_type) {
+                                const auto& bt = types_.get(base_ty);
+                                if (bt.kind == parus::ty::Kind::kArray && bt.array_has_size) {
+                                    return emit_inst_(state, value.type, Effect::Pure,
+                                                      OpConstInt{std::to_string(bt.array_size)});
+                                }
+                            }
+                            return emit_inst_(state, value.type, Effect::Pure, OpArrayLen{.base = base});
+                        }
+                        const auto place = lower_place_(state, sid);
+                        if (place == kInvalidId) return kInvalidId;
+                        return emit_inst_(state, value.type, Effect::MayRead, OpLoad{.place = place});
                     }
                     default:
-                        push_error_("gOIR M0 builder encountered unsupported SIR value kind.");
+                        push_error_("gOIR M1 builder encountered unsupported SIR value kind.");
                         return kInvalidId;
                 }
             }
@@ -441,6 +697,80 @@ namespace parus::goir {
                 state.current_block = cont_bb;
             }
 
+            void lower_while_stmt_(FuncState& state, const parus::sir::Stmt& stmt) {
+                const auto cond_bb = mod_.add_block(Block{});
+                const auto body_bb = mod_.add_block(Block{});
+                const auto after_bb = mod_.add_block(Block{});
+
+                auto& real = mod_.realizations[state.realization];
+                real.blocks.push_back(cond_bb);
+                real.blocks.push_back(body_bb);
+                real.blocks.push_back(after_bb);
+
+                ensure_block_term_(state, TermBr{.target = cond_bb});
+
+                auto cond_state = state;
+                cond_state.current_block = cond_bb;
+                const auto cond = lower_value_(cond_state, stmt.expr);
+                ensure_block_term_(cond_state, TermCondBr{
+                    .cond = cond,
+                    .then_bb = body_bb,
+                    .else_bb = after_bb,
+                });
+
+                auto body_state = state;
+                body_state.current_block = body_bb;
+                lower_block_(body_state, stmt.a);
+                if (body_state.current_block != kInvalidId &&
+                    !mod_.blocks[body_state.current_block].has_term) {
+                    ensure_block_term_(body_state, TermBr{.target = cond_bb});
+                }
+
+                state.current_block = after_bb;
+            }
+
+            void bind_local_(FuncState& state,
+                             const parus::sir::Stmt& stmt,
+                             TypeId binding_ty,
+                             ValueId init_value) {
+                const auto layout = classify_layout_(binding_ty);
+                const bool needs_slot =
+                    stmt.is_set || stmt.is_mut || layout != LayoutClass::Scalar;
+                if (needs_slot) {
+                    const auto slot = emit_inst_(
+                        state,
+                        binding_ty,
+                        Effect::Pure,
+                        OpLocalSlot{.debug_name = mod_.add_string(std::string(stmt.name))},
+                        {},
+                        layout,
+                        true,
+                        binding_ty,
+                        PlaceKind::LocalSlot,
+                        stmt.is_set || stmt.is_mut
+                    );
+                    if (init_value != kInvalidId) {
+                        emit_inst_(state, kInvalidType, Effect::MayWrite, OpStore{.place = slot, .value = init_value});
+                    }
+                    state.locals[stmt.sym] = Binding{
+                        .value = slot,
+                        .type = binding_ty,
+                        .layout = layout,
+                        .is_place = true,
+                        .is_mutable = stmt.is_set || stmt.is_mut,
+                    };
+                    return;
+                }
+
+                state.locals[stmt.sym] = Binding{
+                    .value = init_value,
+                    .type = binding_ty,
+                    .layout = layout,
+                    .is_place = false,
+                    .is_mutable = false,
+                };
+            }
+
             void lower_stmt_(FuncState& state, const parus::sir::Stmt& stmt) {
                 switch (stmt.kind) {
                     case StmtKind::kExprStmt:
@@ -448,19 +778,31 @@ namespace parus::goir {
                             (void)lower_value_(state, stmt.expr);
                         }
                         return;
-                    case StmtKind::kVarDecl:
-                        if (stmt.is_set || stmt.is_mut || stmt.is_static) {
-                            push_error_("gOIR M0 only supports immutable local scalar bindings.");
+                    case StmtKind::kVarDecl: {
+                        if (stmt.is_static) {
+                            push_error_("gOIR M1 does not support static local bindings.");
+                            return;
+                        }
+                        const TypeId binding_ty =
+                            (stmt.declared_type != parus::sir::k_invalid_type) ? stmt.declared_type :
+                            ((stmt.init != parus::sir::k_invalid_value) ? sir_.values[stmt.init].type : kInvalidType);
+                        if (!is_supported_local_type_(binding_ty)) {
+                            push_error_("gOIR M1 local binding type is outside the supported memory/aggregate subset.");
                             return;
                         }
                         if (stmt.init == parus::sir::k_invalid_value) {
-                            push_error_("gOIR M0 requires initialized local bindings.");
+                            push_error_("gOIR M1 requires initialized local bindings.");
                             return;
                         }
-                        state.locals[stmt.sym] = lower_value_(state, stmt.init);
+                        const auto init = lower_value_(state, stmt.init);
+                        bind_local_(state, stmt, binding_ty, init);
                         return;
+                    }
                     case StmtKind::kIfStmt:
                         lower_if_stmt_(state, stmt);
+                        return;
+                    case StmtKind::kWhileStmt:
+                        lower_while_stmt_(state, stmt);
                         return;
                     case StmtKind::kReturn: {
                         if (stmt.expr == parus::sir::k_invalid_value) {
@@ -476,7 +818,7 @@ namespace parus::goir {
                         return;
                     }
                     default:
-                        push_error_("gOIR M0 builder encountered unsupported SIR stmt kind.");
+                        push_error_("gOIR M1 builder encountered unsupported SIR stmt kind.");
                         return;
                 }
             }
@@ -493,7 +835,13 @@ namespace parus::goir {
                 for (uint32_t i = 0; i < fn.param_count; ++i) {
                     const auto& param = sir_.params[fn.param_begin + i];
                     const auto vid = add_block_param_(state.current_block, param.type);
-                    state.locals[param.sym] = vid;
+                    state.locals[param.sym] = Binding{
+                        .value = vid,
+                        .type = param.type,
+                        .layout = classify_layout_(param.type),
+                        .is_place = false,
+                        .is_mutable = false,
+                    };
                 }
 
                 lower_block_(state, fn.entry);
@@ -503,7 +851,7 @@ namespace parus::goir {
                     if (is_unit_type_(types_, fn.ret)) {
                         ensure_block_term_(state, TermRet{});
                     } else {
-                        push_error_("gOIR M0 function '" + std::string(fn.name) + "' falls off the end without return.");
+                        push_error_("gOIR M1 function '" + std::string(fn.name) + "' falls off the end without return.");
                     }
                 }
             }

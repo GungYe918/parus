@@ -23,6 +23,7 @@ namespace parus::goir {
     using BlockId = uint32_t;
     using InstId = uint32_t;
     using ValueId = uint32_t;
+    using RecordLayoutId = uint32_t;
 
     inline constexpr uint32_t kInvalidId = 0xFFFF'FFFFu;
 
@@ -51,6 +52,9 @@ namespace parus::goir {
         Control,
         Call,
         MayTrap,
+        MayRead,
+        MayWrite,
+        MayReadWrite,
     };
 
     enum class BinOp : uint8_t {
@@ -89,6 +93,22 @@ namespace parus::goir {
         Escape,
     };
 
+    enum class LayoutClass : uint8_t {
+        Unknown = 0,
+        Scalar,
+        FixedArray,
+        SliceView,
+        PlainRecord,
+    };
+
+    enum class PlaceKind : uint8_t {
+        None = 0,
+        LocalSlot,
+        FieldPath,
+        IndexPath,
+        SubView,
+    };
+
     struct OwnershipInfo {
         OwnershipKind kind = OwnershipKind::Plain;
         parus::sir::EscapeHandleKind escape_kind = parus::sir::EscapeHandleKind::kTrivial;
@@ -99,47 +119,129 @@ namespace parus::goir {
 
     struct GHeader {
         uint32_t goir_version_major = 1;
-        uint32_t goir_version_minor = 0;
-        uint32_t internal_abi_rev = 1;
+        uint32_t goir_version_minor = 1;
+        uint32_t internal_abi_rev = 2;
         StageKind stage_kind = StageKind::Open;
     };
 
     struct Value {
         TypeId ty = kInvalidType;
+        TypeId place_elem_type = kInvalidType;
         Effect eff = Effect::Pure;
         OwnershipInfo ownership{};
+        LayoutClass layout = LayoutClass::Unknown;
+        PlaceKind place_kind = PlaceKind::None;
+        bool is_place = false;
+        bool is_mutable = false;
         uint32_t def_a = kInvalidId;
         uint32_t def_b = kInvalidId;
+    };
+
+    struct RecordField {
+        StringId name = kInvalidId;
+        TypeId type = kInvalidType;
+    };
+
+    struct RecordLayout {
+        TypeId self_type = kInvalidType;
+        std::vector<RecordField> fields{};
+    };
+
+    struct RecordValueField {
+        StringId name = kInvalidId;
+        ValueId value = kInvalidId;
     };
 
     struct OpConstInt {
         std::string text{};
     };
+
     struct OpConstFloat {
         std::string text{};
     };
+
     struct OpConstBool {
         bool value = false;
     };
+
     struct OpConstNull { };
+
     struct OpUnary {
         UnOp op = UnOp::Plus;
         ValueId src = kInvalidId;
     };
+
     struct OpBinary {
         BinOp op = BinOp::Add;
         ValueId lhs = kInvalidId;
         ValueId rhs = kInvalidId;
     };
+
     struct OpCast {
         CastKind kind = CastKind::As;
         TypeId to = kInvalidType;
         ValueId src = kInvalidId;
     };
+
+    struct OpArrayMake {
+        std::vector<ValueId> elems{};
+    };
+
+    struct OpArrayGet {
+        ValueId base = kInvalidId;
+        ValueId index = kInvalidId;
+    };
+
+    struct OpArrayLen {
+        ValueId base = kInvalidId;
+    };
+
+    struct OpRecordMake {
+        std::vector<RecordValueField> fields{};
+    };
+
+    struct OpLocalSlot {
+        StringId debug_name = kInvalidId;
+    };
+
+    struct OpFieldPlace {
+        ValueId base = kInvalidId;
+        StringId field_name = kInvalidId;
+    };
+
+    struct OpIndexPlace {
+        ValueId base = kInvalidId;
+        ValueId index = kInvalidId;
+    };
+
+    struct OpSubView {
+        ValueId base = kInvalidId;
+        ValueId offset = kInvalidId;
+        ValueId length = kInvalidId;
+    };
+
+    struct OpLoad {
+        ValueId place = kInvalidId;
+    };
+
+    struct OpStore {
+        ValueId place = kInvalidId;
+        ValueId value = kInvalidId;
+    };
+
+    struct OpBorrowView {
+        ValueId source_place = kInvalidId;
+    };
+
+    struct OpEscapeView {
+        ValueId source_place = kInvalidId;
+    };
+
     struct OpSemanticInvoke {
         ComputationId computation = kInvalidId;
         std::vector<ValueId> args{};
     };
+
     struct OpCallDirect {
         RealizationId callee = kInvalidId;
         std::vector<ValueId> args{};
@@ -153,6 +255,18 @@ namespace parus::goir {
         OpUnary,
         OpBinary,
         OpCast,
+        OpArrayMake,
+        OpArrayGet,
+        OpArrayLen,
+        OpRecordMake,
+        OpLocalSlot,
+        OpFieldPlace,
+        OpIndexPlace,
+        OpSubView,
+        OpLoad,
+        OpStore,
+        OpBorrowView,
+        OpEscapeView,
         OpSemanticInvoke,
         OpCallDirect
     >;
@@ -233,6 +347,7 @@ namespace parus::goir {
         std::vector<Value> values{};
         std::vector<Inst> insts{};
         std::vector<Block> blocks{};
+        std::vector<RecordLayout> record_layouts{};
         std::vector<SemanticSig> semantic_sigs{};
         std::vector<GPlacementPolicy> placement_policies{};
         std::vector<GService> services{};
@@ -265,6 +380,18 @@ namespace parus::goir {
         BlockId add_block(const Block& block) {
             blocks.push_back(block);
             return static_cast<BlockId>(blocks.size() - 1);
+        }
+
+        RecordLayoutId add_record_layout(const RecordLayout& layout) {
+            record_layouts.push_back(layout);
+            return static_cast<RecordLayoutId>(record_layouts.size() - 1);
+        }
+
+        const RecordLayout* find_record_layout(TypeId type) const {
+            for (const auto& layout : record_layouts) {
+                if (layout.self_type == type) return &layout;
+            }
+            return nullptr;
         }
 
         SemanticSigId add_semantic_sig(const SemanticSig& sig) {

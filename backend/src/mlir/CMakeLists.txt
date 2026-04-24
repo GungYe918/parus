@@ -19,11 +19,14 @@ target_link_libraries(parus_backend_mlir
     MLIRArithDialect
     MLIRControlFlowDialect
     MLIRIndexDialect
+    MLIRMemRefDialect
+    MLIRMemRefTransforms
     MLIRLLVMDialect
     MLIRFuncToLLVM
     MLIRArithToLLVM
     MLIRControlFlowToLLVM
     MLIRIndexToLLVM
+    MLIRMemRefToLLVM
     MLIRReconcileUnrealizedCasts
     MLIRBuiltinToLLVMIRTranslation
     MLIRLLVMToLLVMIRTranslation

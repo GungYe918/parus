@@ -314,6 +314,7 @@ add_test(NAME parus_parser_incremental_merge_tests COMMAND parus_parser_incremen
 add_test(NAME parus_parser_crash_tests COMMAND parus_parser_crash_tests)
 add_test(NAME parus_parser_ast_golden_tests COMMAND parus_parser_ast_golden_tests)
 add_test(NAME parus_oir_tests COMMAND parus_oir_tests)
+add_test(NAME parus_goir_tests COMMAND parus_goir_tests)
 add_test(NAME parusc_cli_option_tests COMMAND parusc_cli_option_tests)
 if (TARGET parus_cli_tests)
     add_test(NAME parus_cli_tests COMMAND parus_cli_tests)
