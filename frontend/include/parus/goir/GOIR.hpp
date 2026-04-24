@@ -99,6 +99,9 @@ namespace parus::goir {
         FixedArray,
         SliceView,
         PlainRecord,
+        TextView,
+        OptionalScalar,
+        TagEnum,
     };
 
     enum class PlaceKind : uint8_t {
@@ -165,6 +168,10 @@ namespace parus::goir {
     };
 
     struct OpConstNull { };
+
+    struct OpTextLit {
+        std::string quoted_text{};
+    };
 
     struct OpUnary {
         UnOp op = UnOp::Plus;
@@ -237,6 +244,24 @@ namespace parus::goir {
         ValueId source_place = kInvalidId;
     };
 
+    struct OpOptionalSome {
+        ValueId value = kInvalidId;
+    };
+
+    struct OpOptionalNone { };
+
+    struct OpOptionalIsPresent {
+        ValueId optional = kInvalidId;
+    };
+
+    struct OpOptionalGet {
+        ValueId optional = kInvalidId;
+    };
+
+    struct OpEnumTag {
+        int64_t tag = 0;
+    };
+
     struct OpSemanticInvoke {
         ComputationId computation = kInvalidId;
         std::vector<ValueId> args{};
@@ -252,6 +277,7 @@ namespace parus::goir {
         OpConstFloat,
         OpConstBool,
         OpConstNull,
+        OpTextLit,
         OpUnary,
         OpBinary,
         OpCast,
@@ -267,6 +293,11 @@ namespace parus::goir {
         OpStore,
         OpBorrowView,
         OpEscapeView,
+        OpOptionalSome,
+        OpOptionalNone,
+        OpOptionalIsPresent,
+        OpOptionalGet,
+        OpEnumTag,
         OpSemanticInvoke,
         OpCallDirect
     >;
@@ -290,12 +321,25 @@ namespace parus::goir {
         std::vector<ValueId> else_args{};
     };
 
+    struct SwitchArm {
+        int64_t match_value = 0;
+        BlockId target = kInvalidId;
+        std::vector<ValueId> args{};
+    };
+
+    struct TermSwitch {
+        ValueId scrutinee = kInvalidId;
+        BlockId default_bb = kInvalidId;
+        std::vector<ValueId> default_args{};
+        std::vector<SwitchArm> arms{};
+    };
+
     struct TermRet {
         bool has_value = false;
         ValueId value = kInvalidId;
     };
 
-    using Terminator = std::variant<TermBr, TermCondBr, TermRet>;
+    using Terminator = std::variant<TermBr, TermCondBr, TermSwitch, TermRet>;
 
     struct Block {
         std::vector<ValueId> params{};

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <string>
+#include <type_traits>
 #include <unordered_set>
 #include <vector>
 
@@ -163,7 +164,11 @@ namespace parus::goir {
 
                 std::visit([&](const auto& data) {
                     using T = std::decay_t<decltype(data)>;
-                    if constexpr (std::is_same_v<T, OpUnary>) {
+                    if constexpr (std::is_same_v<T, OpTextLit>) {
+                        if (inst.result == kInvalidId) {
+                            push_error_(out, "OpTextLit must produce a result");
+                        }
+                    } else if constexpr (std::is_same_v<T, OpUnary>) {
                         verify_value_ref_(module, data.src, "OpUnary.src", out);
                     } else if constexpr (std::is_same_v<T, OpBinary>) {
                         verify_value_ref_(module, data.lhs, "OpBinary.lhs", out);
@@ -283,6 +288,29 @@ namespace parus::goir {
                         if (module.header.stage_kind != StageKind::Open) {
                             push_error_(out, "OpEscapeView is only legal in gOIR-open");
                         }
+                    } else if constexpr (std::is_same_v<T, OpOptionalSome>) {
+                        verify_value_ref_(module, data.value, "OpOptionalSome.value", out);
+                        if (inst.result == kInvalidId) {
+                            push_error_(out, "OpOptionalSome must produce a result");
+                        }
+                    } else if constexpr (std::is_same_v<T, OpOptionalNone>) {
+                        if (inst.result == kInvalidId) {
+                            push_error_(out, "OpOptionalNone must produce a result");
+                        }
+                    } else if constexpr (std::is_same_v<T, OpOptionalIsPresent>) {
+                        verify_value_ref_(module, data.optional, "OpOptionalIsPresent.optional", out);
+                        if (inst.result == kInvalidId) {
+                            push_error_(out, "OpOptionalIsPresent must produce a result");
+                        }
+                    } else if constexpr (std::is_same_v<T, OpOptionalGet>) {
+                        verify_value_ref_(module, data.optional, "OpOptionalGet.optional", out);
+                        if (inst.result == kInvalidId) {
+                            push_error_(out, "OpOptionalGet must produce a result");
+                        }
+                    } else if constexpr (std::is_same_v<T, OpEnumTag>) {
+                        if (inst.result == kInvalidId) {
+                            push_error_(out, "OpEnumTag must produce a result");
+                        }
                     } else if constexpr (std::is_same_v<T, OpSemanticInvoke>) {
                         if (!is_valid_computation_(module, data.computation)) {
                             push_error_(out, "OpSemanticInvoke has invalid computation");
@@ -320,6 +348,16 @@ namespace parus::goir {
                     verify_value_ref_(module, term.cond, "TermCondBr.cond", out);
                     verify_block_args_(module, term.then_bb, term.then_args, "TermCondBr.then", out);
                     verify_block_args_(module, term.else_bb, term.else_args, "TermCondBr.else", out);
+                } else if constexpr (std::is_same_v<T, TermSwitch>) {
+                    verify_value_ref_(module, term.scrutinee, "TermSwitch.scrutinee", out);
+                    verify_block_args_(module, term.default_bb, term.default_args, "TermSwitch.default", out);
+                    std::unordered_set<int64_t> seen_matches{};
+                    for (const auto& arm : term.arms) {
+                        if (!seen_matches.insert(arm.match_value).second) {
+                            push_error_(out, "TermSwitch has duplicate case value");
+                        }
+                        verify_block_args_(module, arm.target, arm.args, "TermSwitch.case", out);
+                    }
                 } else if constexpr (std::is_same_v<T, TermRet>) {
                     if (term.has_value) {
                         verify_value_ref_(module, term.value, "TermRet.value", out);

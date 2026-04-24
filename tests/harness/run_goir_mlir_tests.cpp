@@ -655,6 +655,167 @@ namespace {
         return ok;
     }
 
+    static bool test_source_text_value_to_mlir_and_llvm_ir_ok_() {
+        const std::string src = R"(
+            @pure def pick(flag: bool, a: text, b: text) -> text {
+                if (flag) {
+                    return a;
+                }
+                return b;
+            }
+
+            @pure def main(flag: bool) -> text {
+                let hello: text = "hello";
+                let world: text = "world";
+                return pick(flag, hello, world);
+            }
+        )";
+
+        parus::goir::Module placed{};
+        parus::ty::TypePool types{};
+        if (!build_placed_goir_from_source_(src, placed, types)) return false;
+
+        parus::backend::mlir::GOIRLoweringResult mlir{};
+        parus::backend::mlir::GOIRLLVMIRResult llvm_ir{};
+        if (!lower_placed_to_mlir_and_llvm_(placed, types, mlir, llvm_ir)) return false;
+
+        bool ok = true;
+        ok &= require_(mlir.mlir_text.find("llvm.mlir.global internal constant @__parus_text_") != std::string::npos,
+                       "MLIR text must materialize text literals as LLVM globals");
+        ok &= require_(mlir.mlir_text.find("func.call @pick") != std::string::npos,
+                       "MLIR text must support direct calls with text-view values");
+        ok &= require_(mlir.mlir_text.find("!llvm.struct<(!llvm.ptr, i64)>") != std::string::npos,
+                       "MLIR text must use the canonical text-view LLVM aggregate");
+        if (!ok) return false;
+
+        ok &= require_(llvm_ir.llvm_ir.find("@__parus_text_") != std::string::npos,
+                       "LLVM IR must contain lowered text globals");
+        ok &= require_(llvm_ir.llvm_ir.find("define { ptr, i64 } @main") != std::string::npos ||
+                       llvm_ir.llvm_ir.find("define {ptr, i64} @main") != std::string::npos,
+                       "LLVM IR must expose text-view functions as struct returns");
+        return ok;
+    }
+
+    static bool test_source_optional_coalesce_to_mlir_and_llvm_ir_ok_() {
+        const std::string src = R"(
+            @pure def takes_opt(x: i32?) -> i32 {
+                return x ?? 99i32;
+            }
+
+            @pure def ret_opt() -> i32? {
+                return 9i32;
+            }
+
+            @pure def main() -> i32 {
+                let a: i32? = 5;
+                let mut b: i32? = null;
+                b = 7;
+                let c: i32 = takes_opt(3);
+                let d: i32? = ret_opt();
+                let e: i32 = d ?? 0i32;
+                return (a ?? 0i32) + (b ?? 0i32) + c + e;
+            }
+        )";
+
+        parus::goir::Module placed{};
+        parus::ty::TypePool types{};
+        if (!build_placed_goir_from_source_(src, placed, types)) return false;
+
+        parus::backend::mlir::GOIRLoweringResult mlir{};
+        parus::backend::mlir::GOIRLLVMIRResult llvm_ir{};
+        if (!lower_placed_to_mlir_and_llvm_(placed, types, mlir, llvm_ir)) return false;
+
+        bool ok = true;
+        ok &= require_(mlir.mlir_text.find("llvm.alloca") != std::string::npos,
+                       "MLIR text must use llvm.alloca for optional local storage");
+        ok &= require_(mlir.mlir_text.find("llvm.load") != std::string::npos,
+                       "MLIR text must load optional values from LLVM-backed storage");
+        ok &= require_(mlir.mlir_text.find("llvm.store") != std::string::npos,
+                       "MLIR text must store optional values through LLVM-backed storage");
+        ok &= require_(mlir.mlir_text.find("llvm.extractvalue") != std::string::npos,
+                       "MLIR text must extract optional tag/payload fields");
+        ok &= require_(mlir.mlir_text.find("llvm.insertvalue") != std::string::npos,
+                       "MLIR text must construct optional values as LLVM aggregates");
+        ok &= require_(mlir.mlir_text.find("cf.cond_br") != std::string::npos,
+                       "MLIR text must lower null-coalescing through CFG");
+        if (!ok) return false;
+
+        ok &= require_(llvm_ir.llvm_ir.find("extractvalue") != std::string::npos,
+                       "LLVM IR must preserve optional tag/payload extraction");
+        return ok;
+    }
+
+    static bool test_source_range_subview_to_mlir_and_llvm_ir_ok_() {
+        const std::string src = R"(
+            @pure def main() -> i32 {
+                let arr: i32[4] = [10i32, 20i32, 30i32, 40i32];
+                let mid: i32[] = arr[1i32..3i32];
+                return mid[0i32] + mid[1i32];
+            }
+        )";
+
+        parus::goir::Module placed{};
+        parus::ty::TypePool types{};
+        if (!build_placed_goir_from_source_(src, placed, types)) return false;
+
+        parus::backend::mlir::GOIRLoweringResult mlir{};
+        parus::backend::mlir::GOIRLLVMIRResult llvm_ir{};
+        if (!lower_placed_to_mlir_and_llvm_(placed, types, mlir, llvm_ir)) return false;
+
+        bool ok = true;
+        ok &= require_(mlir.mlir_text.find("memref.subview") != std::string::npos,
+                       "MLIR text must lower source range slicing to memref.subview");
+        ok &= require_(mlir.mlir_text.find("memref.load") != std::string::npos,
+                       "MLIR text must read from the lowered subview");
+        if (!ok) return false;
+
+        ok &= require_(llvm_ir.llvm_ir.find("define i32 @main") != std::string::npos,
+                       "LLVM IR must contain the source-range subview definition");
+        return ok;
+    }
+
+    static bool test_source_tag_enum_switch_to_mlir_and_llvm_ir_ok_() {
+        const std::string src = R"(
+            enum E {
+                case A,
+                case B,
+            };
+
+            @pure def choose(flag: bool) -> E {
+                if (flag) { return E::A(); }
+                return E::B();
+            }
+
+            @pure def main(flag: bool) -> i32 {
+                let e: E = choose(flag);
+                switch (e) {
+                case E::A: { return 11i32; }
+                case E::B: { return 22i32; }
+                }
+                return 0i32;
+            }
+        )";
+
+        parus::goir::Module placed{};
+        parus::ty::TypePool types{};
+        if (!build_placed_goir_from_source_(src, placed, types)) return false;
+
+        parus::backend::mlir::GOIRLoweringResult mlir{};
+        parus::backend::mlir::GOIRLLVMIRResult llvm_ir{};
+        if (!lower_placed_to_mlir_and_llvm_(placed, types, mlir, llvm_ir)) return false;
+
+        bool ok = true;
+        ok &= require_(mlir.mlir_text.find("cf.switch") != std::string::npos,
+                       "MLIR text must lower tag-only enum switch through cf.switch");
+        ok &= require_(mlir.mlir_text.find("func.call @choose") != std::string::npos,
+                       "MLIR text must lower enum-producing direct calls");
+        if (!ok) return false;
+
+        ok &= require_(llvm_ir.llvm_ir.find("switch i32") != std::string::npos,
+                       "LLVM IR must lower tag-only enum switch to an integer switch");
+        return ok;
+    }
+
     static bool test_manual_block_arg_cfg_to_mlir_and_llvm_ir_ok_() {
         parus::ty::TypePool types{};
         const auto open = make_open_loop_block_arg_module_(types);
@@ -755,6 +916,10 @@ int main() {
     const Case cases[] = {
         {"mlir_smoke", test_mlir_smoke_ok_},
         {"source_memory_record_slice_to_mlir_and_llvm_ir", test_source_memory_record_slice_to_mlir_and_llvm_ir_ok_},
+        {"source_text_value_to_mlir_and_llvm_ir", test_source_text_value_to_mlir_and_llvm_ir_ok_},
+        {"source_optional_coalesce_to_mlir_and_llvm_ir", test_source_optional_coalesce_to_mlir_and_llvm_ir_ok_},
+        {"source_range_subview_to_mlir_and_llvm_ir", test_source_range_subview_to_mlir_and_llvm_ir_ok_},
+        {"source_tag_enum_switch_to_mlir_and_llvm_ir", test_source_tag_enum_switch_to_mlir_and_llvm_ir_ok_},
         {"manual_block_arg_cfg_to_mlir_and_llvm_ir", test_manual_block_arg_cfg_to_mlir_and_llvm_ir_ok_},
         {"manual_array_make_get_to_mlir_and_llvm_ir", test_manual_array_make_get_to_mlir_and_llvm_ir_ok_},
         {"manual_subview_len_to_mlir_and_llvm_ir", test_manual_subview_len_to_mlir_and_llvm_ir_ok_},

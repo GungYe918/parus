@@ -44,6 +44,9 @@ namespace parus::goir {
                 case LayoutClass::FixedArray: return "fixed-array";
                 case LayoutClass::SliceView: return "slice-view";
                 case LayoutClass::PlainRecord: return "plain-record";
+                case LayoutClass::TextView: return "text-view";
+                case LayoutClass::OptionalScalar: return "optional";
+                case LayoutClass::TagEnum: return "tag-enum";
             }
             return "unknown";
         }
@@ -102,6 +105,8 @@ namespace parus::goir {
                     os << "const.bool " << (data.value ? "true" : "false");
                 } else if constexpr (std::is_same_v<T, OpConstNull>) {
                     os << "const.null";
+                } else if constexpr (std::is_same_v<T, OpTextLit>) {
+                    os << "text.lit " << data.quoted_text;
                 } else if constexpr (std::is_same_v<T, OpUnary>) {
                     os << "unary %" << data.src;
                 } else if constexpr (std::is_same_v<T, OpBinary>) {
@@ -139,6 +144,16 @@ namespace parus::goir {
                     os << "borrow.view %" << data.source_place;
                 } else if constexpr (std::is_same_v<T, OpEscapeView>) {
                     os << "escape.view %" << data.source_place;
+                } else if constexpr (std::is_same_v<T, OpOptionalSome>) {
+                    os << "optional.some %" << data.value;
+                } else if constexpr (std::is_same_v<T, OpOptionalNone>) {
+                    os << "optional.none";
+                } else if constexpr (std::is_same_v<T, OpOptionalIsPresent>) {
+                    os << "optional.is_present %" << data.optional;
+                } else if constexpr (std::is_same_v<T, OpOptionalGet>) {
+                    os << "optional.get %" << data.optional;
+                } else if constexpr (std::is_same_v<T, OpEnumTag>) {
+                    os << "enum.tag " << data.tag;
                 } else if constexpr (std::is_same_v<T, OpSemanticInvoke>) {
                     os << "semantic.invoke @" << module.string(module.computations[data.computation].name);
                     print_block_args_(os, data.args);
@@ -192,6 +207,14 @@ namespace parus::goir {
                             print_block_args_(os, term.then_args);
                             os << ", ^bb" << term.else_bb;
                             print_block_args_(os, term.else_args);
+                        } else if constexpr (std::is_same_v<T, TermSwitch>) {
+                            os << "switch %" << term.scrutinee << " default ^bb" << term.default_bb;
+                            print_block_args_(os, term.default_args);
+                            for (const auto& arm : term.arms) {
+                                os << " [" << arm.match_value << " -> ^bb" << arm.target;
+                                print_block_args_(os, arm.args);
+                                os << "]";
+                            }
                         } else if constexpr (std::is_same_v<T, TermRet>) {
                             if (term.has_value) os << "ret %" << term.value;
                             else os << "ret";

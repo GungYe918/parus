@@ -21,8 +21,10 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include <cctype>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #ifndef PARUS_MLIR_SELECTED_MAJOR
@@ -185,6 +187,120 @@ namespace parus::backend::mlir {
             return out.empty() ? std::string("0.0") : out;
         }
 
+        bool starts_with_(std::string_view s, std::string_view pfx) {
+            return s.size() >= pfx.size() && s.substr(0, pfx.size()) == pfx;
+        }
+
+        bool ends_with_(std::string_view s, std::string_view sfx) {
+            return s.size() >= sfx.size() && s.substr(s.size() - sfx.size()) == sfx;
+        }
+
+        bool is_hex_digit_(char c) {
+            return (c >= '0' && c <= '9') ||
+                   (c >= 'a' && c <= 'f') ||
+                   (c >= 'A' && c <= 'F');
+        }
+
+        uint8_t hex_digit_value_(char c) {
+            if (c >= '0' && c <= '9') return static_cast<uint8_t>(c - '0');
+            if (c >= 'a' && c <= 'f') return static_cast<uint8_t>(10 + (c - 'a'));
+            if (c >= 'A' && c <= 'F') return static_cast<uint8_t>(10 + (c - 'A'));
+            return 0;
+        }
+
+        std::string decode_escaped_string_body_(std::string_view body) {
+            std::string out{};
+            out.reserve(body.size());
+
+            for (size_t i = 0; i < body.size(); ++i) {
+                const char c = body[i];
+                if (c != '\\') {
+                    out.push_back(c);
+                    continue;
+                }
+                if (i + 1 >= body.size()) {
+                    out.push_back('\\');
+                    break;
+                }
+
+                const char esc = body[++i];
+                switch (esc) {
+                    case 'n': out.push_back('\n'); break;
+                    case 'r': out.push_back('\r'); break;
+                    case 't': out.push_back('\t'); break;
+                    case '\\': out.push_back('\\'); break;
+                    case '"': out.push_back('"'); break;
+                    case '\'': out.push_back('\''); break;
+                    case '0': out.push_back('\0'); break;
+                    case 'x': {
+                        if (i + 2 < body.size() &&
+                            is_hex_digit_(body[i + 1]) &&
+                            is_hex_digit_(body[i + 2])) {
+                            const uint8_t hi = hex_digit_value_(body[i + 1]);
+                            const uint8_t lo = hex_digit_value_(body[i + 2]);
+                            out.push_back(static_cast<char>((hi << 4) | lo));
+                            i += 2;
+                            break;
+                        }
+                        out.push_back('x');
+                        break;
+                    }
+                    default:
+                        out.push_back(esc);
+                        break;
+                }
+            }
+            return out;
+        }
+
+        std::string parse_string_literal_bytes_(std::string_view text) {
+            if (starts_with_(text, "c\"") && text.size() >= 3 && text.back() == '"') {
+                return decode_escaped_string_body_(text.substr(2, text.size() - 3));
+            }
+            if (starts_with_(text, "cr\"") && text.size() >= 4 && text.back() == '"') {
+                return std::string(text.substr(3, text.size() - 4));
+            }
+            if (text.size() >= 2 && text.front() == '"' && text.back() == '"') {
+                return decode_escaped_string_body_(text.substr(1, text.size() - 2));
+            }
+            if (starts_with_(text, "$\"") && text.size() >= 3 && text.back() == '"') {
+                return decode_escaped_string_body_(text.substr(2, text.size() - 3));
+            }
+            if (starts_with_(text, "R\"\"\"") && ends_with_(text, "\"\"\"") && text.size() >= 7) {
+                return std::string(text.substr(4, text.size() - 7));
+            }
+            if (starts_with_(text, "F\"\"\"") && ends_with_(text, "\"\"\"") && text.size() >= 7) {
+                return std::string(text.substr(4, text.size() - 7));
+            }
+            return std::string(text);
+        }
+
+        std::string escape_mlir_string_bytes_(std::string_view bytes) {
+            static constexpr char kHex[] = "0123456789ABCDEF";
+            std::string out{};
+            out.reserve(bytes.size() * 2);
+            for (const unsigned char c : bytes) {
+                switch (c) {
+                    case '\\': out += "\\\\"; break;
+                    case '"': out += "\\\""; break;
+                    case '\n': out += "\\n"; break;
+                    case '\r': out += "\\r"; break;
+                    case '\t': out += "\\t"; break;
+                    case '\0': out += "\\00"; break;
+                    default:
+                        if (std::isprint(c) != 0) {
+                            out.push_back(static_cast<char>(c));
+                        } else {
+                            out.push_back('\\');
+                            out.push_back(kHex[(c >> 4) & 0xF]);
+                            out.push_back(kHex[c & 0xF]);
+                        }
+                        break;
+                }
+            }
+            return out;
+        }
+
         class MlirEmitter {
         public:
             MlirEmitter(const parus::goir::Module& module, const parus::ty::TypePool& types)
@@ -206,6 +322,8 @@ namespace parus::backend::mlir {
                 std::string mlir_text{};
                 llvm::raw_string_ostream os(mlir_text);
                 os << "module {\n";
+                collect_text_globals_();
+                emit_text_globals_(os);
                 for (size_t i = 0; i < module_.realizations.size(); ++i) {
                     const auto& real = module_.realizations[i];
                     if (real.family != parus::goir::FamilyKind::Cpu &&
@@ -230,6 +348,13 @@ namespace parus::backend::mlir {
             std::vector<CompileMessage> take_messages() { return std::move(messages_); }
 
         private:
+            struct TextGlobalInfo {
+                std::string symbol{};
+                std::string escaped_bytes{};
+                size_t byte_count = 0;
+                bool uses_sentinel_byte = false;
+            };
+
             struct PlaceInfo {
                 enum class Kind : uint8_t {
                     None = 0,
@@ -250,8 +375,10 @@ namespace parus::backend::mlir {
             std::vector<std::string> value_names_;
             std::vector<std::optional<PlaceInfo>> place_infos_;
             uint32_t temp_counter_ = 0;
+            uint32_t text_global_counter_ = 0;
             bool failed_ = false;
             std::vector<CompileMessage> messages_{};
+            std::unordered_map<parus::goir::ValueId, TextGlobalInfo> text_globals_{};
 
             void fail_(std::string text) {
                 failed_ = true;
@@ -296,12 +423,89 @@ namespace parus::backend::mlir {
                 return module_.find_record_layout(ty);
             }
 
-            std::optional<std::string> llvm_type_(parus::ty::TypeId ty) const {
+            bool is_text_(parus::ty::TypeId ty) const {
+                return is_builtin_(types_, ty, parus::ty::Builtin::kText);
+            }
+
+            bool is_optional_(parus::ty::TypeId ty) const {
+                if (ty == parus::ty::kInvalidType) return false;
+                return types_.get(ty).kind == parus::ty::Kind::kOptional;
+            }
+
+            parus::ty::TypeId optional_elem_(parus::ty::TypeId ty) const {
+                return is_optional_(ty) ? types_.get(ty).elem : parus::ty::kInvalidType;
+            }
+
+            std::optional<parus::ty::TypeId> tag_enum_storage_type_(parus::ty::TypeId ty) const {
+                const auto* layout = record_layout_(ty);
+                if (layout == nullptr || layout->fields.size() != 1) return std::nullopt;
+                if (module_.string(layout->fields[0].name) != "__tag") return std::nullopt;
+                return layout->fields[0].type;
+            }
+
+            bool is_tag_enum_(parus::ty::TypeId ty) const {
+                return tag_enum_storage_type_(ty).has_value();
+            }
+
+            std::optional<std::string> scalar_like_type_(parus::ty::TypeId ty) const {
                 if (const auto scalar = mlir_scalar_type_(types_, ty); scalar.has_value()) {
+                    return scalar;
+                }
+                if (const auto tag_ty = tag_enum_storage_type_(ty); tag_ty.has_value()) {
+                    return mlir_scalar_type_(types_, *tag_ty);
+                }
+                return std::nullopt;
+            }
+
+            bool is_integer_like_(parus::ty::TypeId ty) const {
+                if (const auto builtin = builtin_of_(types_, ty); builtin.has_value()) {
+                    return is_integer_builtin_(*builtin);
+                }
+                if (const auto tag_ty = tag_enum_storage_type_(ty); tag_ty.has_value()) {
+                    const auto builtin = builtin_of_(types_, *tag_ty);
+                    return builtin.has_value() && is_integer_builtin_(*builtin);
+                }
+                return false;
+            }
+
+            bool is_signed_like_(parus::ty::TypeId ty) const {
+                if (const auto builtin = builtin_of_(types_, ty); builtin.has_value()) {
+                    return is_signed_builtin_(*builtin);
+                }
+                if (const auto tag_ty = tag_enum_storage_type_(ty); tag_ty.has_value()) {
+                    const auto builtin = builtin_of_(types_, *tag_ty);
+                    return builtin.has_value() && is_signed_builtin_(*builtin);
+                }
+                return false;
+            }
+
+            std::string llvm_text_view_type_() const {
+                return "!llvm.struct<(!llvm.ptr, i64)>";
+            }
+
+            std::optional<std::string> mlir_value_type_(parus::ty::TypeId ty) const {
+                if (ty == parus::ty::kInvalidType) return std::nullopt;
+                if (is_unit_(ty)) return std::string("()");
+                if (const auto scalar = scalar_like_type_(ty); scalar.has_value()) {
+                    return scalar;
+                }
+                return llvm_type_(ty);
+            }
+
+            std::optional<std::string> llvm_type_(parus::ty::TypeId ty) const {
+                if (const auto scalar = scalar_like_type_(ty); scalar.has_value()) {
                     return scalar;
                 }
                 if (ty == parus::ty::kInvalidType) return std::nullopt;
                 const auto& t = types_.get(ty);
+                if (t.kind == parus::ty::Kind::kBuiltin && t.builtin == parus::ty::Builtin::kText) {
+                    return llvm_text_view_type_();
+                }
+                if (t.kind == parus::ty::Kind::kOptional) {
+                    const auto payload_ty = llvm_type_(t.elem);
+                    if (!payload_ty.has_value()) return std::nullopt;
+                    return "!llvm.struct<(i1, " + *payload_ty + ")>";
+                }
                 if (t.kind == parus::ty::Kind::kArray && t.array_has_size) {
                     const auto elem = llvm_type_(t.elem);
                     if (!elem.has_value()) return std::nullopt;
@@ -319,6 +523,37 @@ namespace parus::backend::mlir {
                     return out;
                 }
                 return std::nullopt;
+            }
+
+            void collect_text_globals_() {
+                for (size_t iid = 0; iid < module_.insts.size(); ++iid) {
+                    const auto& inst = module_.insts[iid];
+                    if (inst.result == parus::goir::kInvalidId) continue;
+                    const auto* text = std::get_if<parus::goir::OpTextLit>(&inst.data);
+                    if (text == nullptr) continue;
+
+                    auto bytes = parse_string_literal_bytes_(text->quoted_text);
+                    bool uses_sentinel = false;
+                    if (bytes.empty()) {
+                        bytes.push_back('\0');
+                        uses_sentinel = true;
+                    }
+                    text_globals_[inst.result] = TextGlobalInfo{
+                        .symbol = "__parus_text_" + std::to_string(text_global_counter_++),
+                        .escaped_bytes = escape_mlir_string_bytes_(bytes),
+                        .byte_count = uses_sentinel ? size_t{0} : bytes.size(),
+                        .uses_sentinel_byte = uses_sentinel,
+                    };
+                }
+            }
+
+            void emit_text_globals_(llvm::raw_ostream& os) {
+                for (const auto& [_, global] : text_globals_) {
+                    const size_t storage_len = global.uses_sentinel_byte ? size_t{1} : global.byte_count;
+                    os << "  llvm.mlir.global internal constant @" << global.symbol
+                       << "(\"" << global.escaped_bytes << "\") : !llvm.array<"
+                       << storage_len << " x i8>\n";
+                }
             }
 
             const parus::goir::Inst* producer_inst_(parus::goir::ValueId id) const {
@@ -370,7 +605,7 @@ namespace parus::backend::mlir {
             }
 
             std::string const_zero_(llvm::raw_ostream& os, parus::ty::TypeId ty) {
-                const auto mlir_ty = mlir_scalar_type_(types_, ty);
+                const auto mlir_ty = scalar_like_type_(ty);
                 const auto name = make_temp_();
                 if (is_float_(ty)) {
                     os << "    " << name << " = arith.constant 0.0 : " << *mlir_ty << "\n";
@@ -381,7 +616,7 @@ namespace parus::backend::mlir {
             }
 
             std::string const_all_ones_(llvm::raw_ostream& os, parus::ty::TypeId ty) {
-                const auto mlir_ty = mlir_scalar_type_(types_, ty);
+                const auto mlir_ty = scalar_like_type_(ty);
                 const auto name = make_temp_();
                 os << "    " << name << " = arith.constant -1 : " << *mlir_ty << "\n";
                 return name;
@@ -389,7 +624,7 @@ namespace parus::backend::mlir {
 
             std::string const_bool_(llvm::raw_ostream& os, bool value) {
                 const auto name = make_temp_();
-                os << "    " << name << " = arith.constant " << (value ? "true" : "false") << " : i1\n";
+                os << "    " << name << " = arith.constant " << (value ? "true" : "false") << "\n";
                 return name;
             }
 
@@ -414,7 +649,7 @@ namespace parus::backend::mlir {
                     fail_("index conversion saw invalid type");
                     return name;
                 }
-                const auto ty = mlir_scalar_type_(types_, gv.ty);
+                const auto ty = scalar_like_type_(gv.ty);
                 if (!ty.has_value()) {
                     fail_("index conversion only supports scalar integer values");
                     return name;
@@ -429,7 +664,7 @@ namespace parus::backend::mlir {
             std::string cast_index_to_result_(llvm::raw_ostream& os,
                                               std::string_view index_value,
                                               parus::ty::TypeId result_ty) {
-                const auto result_mlir_ty = mlir_scalar_type_(types_, result_ty);
+                const auto result_mlir_ty = scalar_like_type_(result_ty);
                 if (!result_mlir_ty.has_value()) {
                     fail_("array.len result type must be a scalar integer");
                     return "%invalid";
@@ -455,7 +690,7 @@ namespace parus::backend::mlir {
                     return std::nullopt;
                 }
                 const auto& arr_ty = types_.get(module_.values[value].ty);
-                const auto elem_ty = mlir_scalar_type_(types_, arr_ty.elem);
+                const auto elem_ty = scalar_like_type_(arr_ty.elem);
                 if (!elem_ty.has_value()) {
                     fail_("array.make materialization requires scalar element types.");
                     return std::nullopt;
@@ -634,7 +869,7 @@ namespace parus::backend::mlir {
                 if (base_ty != parus::ty::kInvalidType) {
                     const auto& t = types_.get(base_ty);
                     if (t.kind == parus::ty::Kind::kArray && t.array_has_size) {
-                        const auto result_mlir_ty = mlir_scalar_type_(types_, module_.values[result].ty);
+                        const auto result_mlir_ty = scalar_like_type_(module_.values[result].ty);
                         if (!result_mlir_ty.has_value()) {
                             fail_("array.len result type must be an integer scalar");
                             return;
@@ -670,11 +905,11 @@ namespace parus::backend::mlir {
                     }
                     std::string elem_ty{};
                     if (layout == parus::goir::LayoutClass::Scalar) {
-                        const auto scalar = mlir_scalar_type_(types_, ty);
+                        const auto scalar = scalar_like_type_(ty);
                         elem_ty = scalar.has_value() ? *scalar : std::string{};
                     } else {
                         const auto& arr_ty = types_.get(ty);
-                        const auto elem = mlir_scalar_type_(types_, arr_ty.elem);
+                        const auto elem = scalar_like_type_(arr_ty.elem);
                         elem_ty = elem.has_value() ? *elem : std::string{};
                     }
                     const auto slot = make_temp_();
@@ -690,10 +925,13 @@ namespace parus::backend::mlir {
                     return;
                 }
 
-                if (layout == parus::goir::LayoutClass::PlainRecord) {
+                if (layout == parus::goir::LayoutClass::PlainRecord ||
+                    layout == parus::goir::LayoutClass::TextView ||
+                    layout == parus::goir::LayoutClass::OptionalScalar ||
+                    layout == parus::goir::LayoutClass::TagEnum) {
                     const auto llvm_ty = llvm_type_(ty);
                     if (!llvm_ty.has_value()) {
-                        fail_("plain-record local slot requires an LLVM aggregate type.");
+                        fail_("LLVM-backed local slot requires a compatible LLVM type.");
                         return;
                     }
                     const auto count = llvm_const_i64_(os, 1);
@@ -719,26 +957,98 @@ namespace parus::backend::mlir {
                     using T = std::decay_t<decltype(data)>;
                     if constexpr (std::is_same_v<T, parus::goir::OpConstInt>) {
                         const auto ty = module_.values[inst.result].ty;
-                        const auto mlir_ty = mlir_scalar_type_(types_, ty);
+                        const auto mlir_ty = scalar_like_type_(ty);
                         if (!mlir_ty.has_value()) return fail_("unsupported integer constant type for MLIR lowering");
                         os << "    " << value_name_(inst.result) << " = arith.constant "
                            << sanitize_int_literal_(data.text) << " : " << *mlir_ty << "\n";
                     } else if constexpr (std::is_same_v<T, parus::goir::OpConstFloat>) {
                         const auto ty = module_.values[inst.result].ty;
-                        const auto mlir_ty = mlir_scalar_type_(types_, ty);
+                        const auto mlir_ty = scalar_like_type_(ty);
                         if (!mlir_ty.has_value()) return fail_("unsupported float constant type for MLIR lowering");
                         os << "    " << value_name_(inst.result) << " = arith.constant "
                            << sanitize_float_literal_(data.text) << " : " << *mlir_ty << "\n";
                     } else if constexpr (std::is_same_v<T, parus::goir::OpConstBool>) {
                         os << "    " << value_name_(inst.result) << " = arith.constant "
-                           << (data.value ? "true" : "false") << " : i1\n";
+                           << (data.value ? "true" : "false") << "\n";
                     } else if constexpr (std::is_same_v<T, parus::goir::OpConstNull>) {
                         fail_("null constants are outside the M1 MLIR lowering subset");
+                    } else if constexpr (std::is_same_v<T, parus::goir::OpTextLit>) {
+                        const auto it = text_globals_.find(inst.result);
+                        if (it == text_globals_.end()) {
+                            fail_("text literal lowering could not find a prepared global string");
+                            return;
+                        }
+                        const auto text_ty = llvm_type_(module_.values[inst.result].ty);
+                        if (!text_ty.has_value()) {
+                            fail_("text literal lowering requires a text-view LLVM type");
+                            return;
+                        }
+                        const size_t storage_len = it->second.uses_sentinel_byte ? size_t{1} : it->second.byte_count;
+                        const auto addr = make_temp_();
+                        os << "    " << addr << " = llvm.mlir.addressof @" << it->second.symbol << " : !llvm.ptr\n";
+                        const auto ptr = make_temp_();
+                        os << "    " << ptr << " = llvm.getelementptr " << addr
+                           << "[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<"
+                           << storage_len << " x i8>\n";
+                        const auto len = llvm_const_i64_(os, static_cast<int64_t>(it->second.byte_count));
+                        const auto zero = make_temp_();
+                        os << "    " << zero << " = llvm.mlir.zero : " << *text_ty << "\n";
+                        const auto with_ptr = make_temp_();
+                        os << "    " << with_ptr << " = llvm.insertvalue " << ptr << ", " << zero
+                           << "[0] : " << *text_ty << "\n";
+                        os << "    " << value_name_(inst.result) << " = llvm.insertvalue " << len << ", " << with_ptr
+                           << "[1] : " << *text_ty << "\n";
+                    } else if constexpr (std::is_same_v<T, parus::goir::OpOptionalSome>) {
+                        const auto opt_ty = llvm_type_(module_.values[inst.result].ty);
+                        if (!opt_ty.has_value()) {
+                            fail_("optional.some lowering requires an LLVM-compatible optional type");
+                            return;
+                        }
+                        const auto present = const_bool_(os, true);
+                        const auto zero = make_temp_();
+                        os << "    " << zero << " = llvm.mlir.zero : " << *opt_ty << "\n";
+                        const auto with_present = make_temp_();
+                        os << "    " << with_present << " = llvm.insertvalue " << present << ", " << zero
+                           << "[0] : " << *opt_ty << "\n";
+                        os << "    " << value_name_(inst.result) << " = llvm.insertvalue "
+                           << value_name_(data.value) << ", " << with_present
+                           << "[1] : " << *opt_ty << "\n";
+                    } else if constexpr (std::is_same_v<T, parus::goir::OpOptionalNone>) {
+                        const auto opt_ty = llvm_type_(module_.values[inst.result].ty);
+                        if (!opt_ty.has_value()) {
+                            fail_("optional.none lowering requires an LLVM-compatible optional type");
+                            return;
+                        }
+                        os << "    " << value_name_(inst.result) << " = llvm.mlir.zero : " << *opt_ty << "\n";
+                    } else if constexpr (std::is_same_v<T, parus::goir::OpOptionalIsPresent>) {
+                        const auto opt_ty = llvm_type_(module_.values[data.optional].ty);
+                        if (!opt_ty.has_value()) {
+                            fail_("optional.is_present lowering requires an LLVM-compatible optional type");
+                            return;
+                        }
+                        os << "    " << value_name_(inst.result) << " = llvm.extractvalue "
+                           << value_name_(data.optional) << "[0] : " << *opt_ty << "\n";
+                    } else if constexpr (std::is_same_v<T, parus::goir::OpOptionalGet>) {
+                        const auto opt_ty = llvm_type_(module_.values[data.optional].ty);
+                        if (!opt_ty.has_value()) {
+                            fail_("optional.get lowering requires an LLVM-compatible optional type");
+                            return;
+                        }
+                        os << "    " << value_name_(inst.result) << " = llvm.extractvalue "
+                           << value_name_(data.optional) << "[1] : " << *opt_ty << "\n";
+                    } else if constexpr (std::is_same_v<T, parus::goir::OpEnumTag>) {
+                        const auto tag_ty = scalar_like_type_(module_.values[inst.result].ty);
+                        if (!tag_ty.has_value()) {
+                            fail_("enum.tag lowering requires a scalar tag storage type");
+                            return;
+                        }
+                        os << "    " << value_name_(inst.result) << " = arith.constant "
+                           << data.tag << " : " << *tag_ty << "\n";
                     } else if constexpr (std::is_same_v<T, parus::goir::OpUnary>) {
                         const auto ty = module_.values[inst.result].ty;
                         const auto result = value_name_(inst.result);
                         const auto src = value_name_(data.src);
-                        const auto mlir_ty = mlir_scalar_type_(types_, ty);
+                        const auto mlir_ty = scalar_like_type_(ty);
                         if (!mlir_ty.has_value()) return fail_("unsupported unary type for MLIR lowering");
                         switch (data.op) {
                             case parus::goir::UnOp::Plus:
@@ -761,7 +1071,7 @@ namespace parus::backend::mlir {
                                 break;
                             }
                             case parus::goir::UnOp::BitNot: {
-                                if (!is_integer_(ty)) {
+                                if (!is_integer_like_(ty)) {
                                     fail_("bitnot requires integer in M1 MLIR lowering");
                                     return;
                                 }
@@ -777,14 +1087,14 @@ namespace parus::backend::mlir {
                         const auto result = value_name_(inst.result);
                         const auto lhs = value_name_(data.lhs);
                         const auto rhs = value_name_(data.rhs);
-                        const auto result_mlir_ty = mlir_scalar_type_(types_, result_ty_id);
-                        const auto operand_mlir_ty = mlir_scalar_type_(types_, operand_ty_id);
+                        const auto result_mlir_ty = scalar_like_type_(result_ty_id);
+                        const auto operand_mlir_ty = scalar_like_type_(operand_ty_id);
                         if (!result_mlir_ty.has_value() || !operand_mlir_ty.has_value()) {
                             return fail_("unsupported binary type for MLIR lowering");
                         }
 
                         const bool is_float = is_float_(operand_ty_id);
-                        const bool is_int = is_integer_(operand_ty_id);
+                        const bool is_int = is_integer_like_(operand_ty_id);
                         switch (data.op) {
                             case parus::goir::BinOp::Add:
                                 os << "    " << result << " = " << (is_float ? "arith.addf " : "arith.addi ")
@@ -804,7 +1114,7 @@ namespace parus::backend::mlir {
                                        << " : " << *result_mlir_ty << "\n";
                                 } else {
                                     os << "    " << result << " = "
-                                       << (is_signed_(operand_ty_id) ? "arith.divsi " : "arith.divui ")
+                                       << (is_signed_like_(operand_ty_id) ? "arith.divsi " : "arith.divui ")
                                        << lhs << ", " << rhs << " : " << *result_mlir_ty << "\n";
                                 }
                                 break;
@@ -814,7 +1124,7 @@ namespace parus::backend::mlir {
                                        << " : " << *result_mlir_ty << "\n";
                                 } else {
                                     os << "    " << result << " = "
-                                       << (is_signed_(operand_ty_id) ? "arith.remsi " : "arith.remui ")
+                                       << (is_signed_like_(operand_ty_id) ? "arith.remsi " : "arith.remui ")
                                        << lhs << ", " << rhs << " : " << *result_mlir_ty << "\n";
                                 }
                                 break;
@@ -840,10 +1150,10 @@ namespace parus::backend::mlir {
                                 } else if (is_int) {
                                     const char* pred = "eq";
                                     switch (data.op) {
-                                        case parus::goir::BinOp::Lt: pred = is_signed_(operand_ty_id) ? "slt" : "ult"; break;
-                                        case parus::goir::BinOp::Le: pred = is_signed_(operand_ty_id) ? "sle" : "ule"; break;
-                                        case parus::goir::BinOp::Gt: pred = is_signed_(operand_ty_id) ? "sgt" : "ugt"; break;
-                                        case parus::goir::BinOp::Ge: pred = is_signed_(operand_ty_id) ? "sge" : "uge"; break;
+                                        case parus::goir::BinOp::Lt: pred = is_signed_like_(operand_ty_id) ? "slt" : "ult"; break;
+                                        case parus::goir::BinOp::Le: pred = is_signed_like_(operand_ty_id) ? "sle" : "ule"; break;
+                                        case parus::goir::BinOp::Gt: pred = is_signed_like_(operand_ty_id) ? "sgt" : "ugt"; break;
+                                        case parus::goir::BinOp::Ge: pred = is_signed_like_(operand_ty_id) ? "sge" : "uge"; break;
                                         case parus::goir::BinOp::Eq: pred = "eq"; break;
                                         case parus::goir::BinOp::Ne: pred = "ne"; break;
                                         default: break;
@@ -869,8 +1179,8 @@ namespace parus::backend::mlir {
                         const auto dst_ty = module_.values[inst.result].ty;
                         const auto src_name = value_name_(data.src);
                         const auto dst_name = value_name_(inst.result);
-                        const auto src_mlir_ty = mlir_scalar_type_(types_, src_ty);
-                        const auto dst_mlir_ty = mlir_scalar_type_(types_, dst_ty);
+                        const auto src_mlir_ty = scalar_like_type_(src_ty);
+                        const auto dst_mlir_ty = scalar_like_type_(dst_ty);
                         if (!src_mlir_ty.has_value() || !dst_mlir_ty.has_value()) {
                             fail_("unsupported cast type in M1 MLIR lowering");
                             return;
@@ -879,14 +1189,14 @@ namespace parus::backend::mlir {
                             value_names_[inst.result] = src_name;
                             return;
                         }
-                        if (is_integer_(src_ty) && is_integer_(dst_ty)) {
+                        if (is_integer_like_(src_ty) && is_integer_like_(dst_ty)) {
                             const auto src_width = src_mlir_ty->substr(1);
                             const auto dst_width = dst_mlir_ty->substr(1);
                             if (src_width == dst_width) {
                                 value_names_[inst.result] = src_name;
                             } else if (std::stoi(std::string(dst_width)) > std::stoi(std::string(src_width))) {
                                 os << "    " << dst_name << " = "
-                                   << (is_signed_(src_ty) ? "arith.extsi " : "arith.extui ")
+                                   << (is_signed_like_(src_ty) ? "arith.extsi " : "arith.extui ")
                                    << src_name << " : " << *src_mlir_ty << " to " << *dst_mlir_ty << "\n";
                             } else {
                                 os << "    " << dst_name << " = arith.trunci " << src_name
@@ -894,15 +1204,15 @@ namespace parus::backend::mlir {
                             }
                             return;
                         }
-                        if (is_integer_(src_ty) && is_float_(dst_ty)) {
+                        if (is_integer_like_(src_ty) && is_float_(dst_ty)) {
                             os << "    " << dst_name << " = "
-                               << (is_signed_(src_ty) ? "arith.sitofp " : "arith.uitofp ")
+                               << (is_signed_like_(src_ty) ? "arith.sitofp " : "arith.uitofp ")
                                << src_name << " : " << *src_mlir_ty << " to " << *dst_mlir_ty << "\n";
                             return;
                         }
-                        if (is_float_(src_ty) && is_integer_(dst_ty)) {
+                        if (is_float_(src_ty) && is_integer_like_(dst_ty)) {
                             os << "    " << dst_name << " = "
-                               << (is_signed_(dst_ty) ? "arith.fptosi " : "arith.fptoui ")
+                               << (is_signed_like_(dst_ty) ? "arith.fptosi " : "arith.fptoui ")
                                << src_name << " : " << *src_mlir_ty << " to " << *dst_mlir_ty << "\n";
                             return;
                         }
@@ -915,7 +1225,7 @@ namespace parus::backend::mlir {
                                << src_name << " : " << *src_mlir_ty << " to " << *dst_mlir_ty << "\n";
                             return;
                         }
-                        if (is_builtin_(types_, src_ty, parus::ty::Builtin::kBool) && is_integer_(dst_ty)) {
+                        if (is_builtin_(types_, src_ty, parus::ty::Builtin::kBool) && is_integer_like_(dst_ty)) {
                             os << "    " << dst_name << " = arith.extui " << src_name
                                << " : i1 to " << *dst_mlir_ty << "\n";
                             return;
@@ -1011,17 +1321,17 @@ namespace parus::backend::mlir {
                                 arg_types += ", ";
                             }
                             args += value_name_(data.args[i]);
-                            const auto mlir_ty = mlir_scalar_type_(types_, module_.values[data.args[i]].ty);
+                            const auto mlir_ty = mlir_value_type_(module_.values[data.args[i]].ty);
                             if (!mlir_ty.has_value()) {
-                                fail_("M1 direct calls only support scalar arguments.");
+                                fail_("M1 direct calls only support LLVM-compatible value arguments.");
                                 return;
                             }
                             arg_types += *mlir_ty;
                         }
                         if (inst.result != parus::goir::kInvalidId) {
-                            const auto result_ty = mlir_scalar_type_(types_, sig.result_type);
+                            const auto result_ty = mlir_value_type_(sig.result_type);
                             if (!result_ty.has_value()) {
-                                fail_("M1 direct calls only support scalar results.");
+                                fail_("M1 direct calls only support LLVM-compatible value results.");
                                 return;
                             }
                             os << "    " << value_name_(inst.result) << " = func.call @"
@@ -1045,9 +1355,9 @@ namespace parus::backend::mlir {
                 os << "(";
                 for (size_t i = 0; i < args.size(); ++i) {
                     if (i != 0) os << ", ";
-                    const auto ty = mlir_scalar_type_(types_, module_.values[args[i]].ty);
+                    const auto ty = mlir_value_type_(module_.values[args[i]].ty);
                     if (!ty.has_value()) {
-                        fail_("block arguments currently require scalar value types in M1.");
+                        fail_("block arguments currently require LLVM-compatible value types in M1.");
                         return;
                     }
                     os << value_name_(args[i]) << " : " << *ty;
@@ -1068,11 +1378,31 @@ namespace parus::backend::mlir {
                         os << ", ";
                         emit_branch_target_(os, term.else_bb, term.else_args);
                         os << "\n";
+                    } else if constexpr (std::is_same_v<T, parus::goir::TermSwitch>) {
+                        const auto scrutinee_ty = scalar_like_type_(module_.values[term.scrutinee].ty);
+                        if (!scrutinee_ty.has_value()) {
+                            fail_("cf.switch lowering requires an integer-like scrutinee type.");
+                            return;
+                        }
+                        os << "    cf.switch " << value_name_(term.scrutinee) << " : " << *scrutinee_ty << ", [\n";
+                        os << "      default: ";
+                        emit_branch_target_(os, term.default_bb, term.default_args);
+                        if (failed_) return;
+                        if (!term.arms.empty()) os << ",";
+                        os << "\n";
+                        for (size_t i = 0; i < term.arms.size(); ++i) {
+                            os << "      " << term.arms[i].match_value << ": ";
+                            emit_branch_target_(os, term.arms[i].target, term.arms[i].args);
+                            if (failed_) return;
+                            if (i + 1 != term.arms.size()) os << ",";
+                            os << "\n";
+                        }
+                        os << "    ]\n";
                     } else if constexpr (std::is_same_v<T, parus::goir::TermRet>) {
                         if (term.has_value) {
-                            const auto ty = mlir_scalar_type_(types_, module_.values[term.value].ty);
+                            const auto ty = mlir_value_type_(module_.values[term.value].ty);
                             if (!ty.has_value()) {
-                                fail_("func.return currently requires a scalar result in M1.");
+                                fail_("func.return currently requires an LLVM-compatible result type in M1.");
                                 return;
                             }
                             os << "    func.return " << value_name_(term.value) << " : " << *ty << "\n";
@@ -1087,7 +1417,7 @@ namespace parus::backend::mlir {
                                    const parus::goir::GRealization& real) {
                 const auto sig_id = module_.computations[real.computation].sig;
                 const auto& sig = module_.semantic_sigs[sig_id];
-                const auto result_ty = mlir_scalar_type_(types_, sig.result_type);
+                const auto result_ty = mlir_value_type_(sig.result_type);
                 if (!result_ty.has_value() && !is_unit_(sig.result_type)) {
                     fail_("unsupported function result type in M1 MLIR lowering");
                     return;
@@ -1119,7 +1449,7 @@ namespace parus::backend::mlir {
                 os << "  func.func @" << module_.string(real.name) << "(";
                 for (size_t i = 0; i < entry.params.size(); ++i) {
                     if (i != 0) os << ", ";
-                    const auto mlir_ty = mlir_scalar_type_(types_, module_.values[entry.params[i]].ty);
+                    const auto mlir_ty = mlir_value_type_(module_.values[entry.params[i]].ty);
                     if (!mlir_ty.has_value()) {
                         fail_("unsupported entry parameter type in M1 MLIR lowering");
                         return;
@@ -1141,7 +1471,7 @@ namespace parus::backend::mlir {
                             os << "(";
                             for (size_t i = 0; i < block.params.size(); ++i) {
                                 if (i != 0) os << ", ";
-                                const auto mlir_ty = mlir_scalar_type_(types_, module_.values[block.params[i]].ty);
+                                const auto mlir_ty = mlir_value_type_(module_.values[block.params[i]].ty);
                                 if (!mlir_ty.has_value()) {
                                     fail_("unsupported non-entry block parameter type in M1 MLIR lowering");
                                     return;

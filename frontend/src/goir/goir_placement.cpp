@@ -12,6 +12,9 @@ namespace parus::goir {
                 case LayoutClass::FixedArray:
                 case LayoutClass::SliceView:
                 case LayoutClass::PlainRecord:
+                case LayoutClass::TextView:
+                case LayoutClass::OptionalScalar:
+                case LayoutClass::TagEnum:
                     return true;
                 case LayoutClass::Unknown:
                     return false;
@@ -90,6 +93,12 @@ namespace parus::goir {
                 std::holds_alternative<OpEscapeView>(inst.data)) {
                 out.messages.push_back(Message{
                     "M1 placement rejects ownership-sensitive borrow/escape markers; runtime ownership lowering is not implemented yet."
+                });
+                return out;
+            }
+            if (std::holds_alternative<OpConstNull>(inst.data)) {
+                out.messages.push_back(Message{
+                    "official gOIR placement rejects raw null constants; lower nullable values through optional.none instead."
                 });
                 return out;
             }
