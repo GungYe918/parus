@@ -9,6 +9,7 @@ add_library(parus_backend_mlir STATIC
 target_link_libraries(parus_backend_mlir
     PUBLIC
     parus_backend
+    parus_backend_aot
     PRIVATE
     parus_mlirconfig
     MLIRIR

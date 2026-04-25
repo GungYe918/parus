@@ -215,7 +215,7 @@ if (TARGET parus_backend_mlir)
     add_executable(parus_goir_mlir_tests
         harness/run_goir_mlir_tests.cpp
     )
-    target_link_libraries(parus_goir_mlir_tests PRIVATE parus_frontend parus_backend_mlir)
+    target_link_libraries(parus_goir_mlir_tests PRIVATE parus_frontend parus_backend_mlir parus_backend_aot)
     target_compile_features(parus_goir_mlir_tests PRIVATE cxx_std_23)
     target_compile_definitions(parus_goir_mlir_tests PRIVATE
         PARUS_TEST_MLIR_LANE=${PARUS_MLIR_VERSION}

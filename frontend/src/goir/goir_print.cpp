@@ -27,6 +27,23 @@ namespace parus::goir {
             return "unknown";
         }
 
+        const char* abi_name_(AbiKind abi) {
+            switch (abi) {
+                case AbiKind::Parus: return "parus";
+                case AbiKind::C: return "c";
+            }
+            return "unknown";
+        }
+
+        const char* linkage_name_(LinkageKind linkage) {
+            switch (linkage) {
+                case LinkageKind::Internal: return "internal";
+                case LinkageKind::External: return "external";
+                case LinkageKind::Exported: return "exported";
+            }
+            return "unknown";
+        }
+
         const char* ownership_name_(OwnershipKind kind) {
             switch (kind) {
                 case OwnershipKind::Plain: return "plain";
@@ -55,6 +72,7 @@ namespace parus::goir {
             switch (place) {
                 case PlaceKind::None: return "none";
                 case PlaceKind::LocalSlot: return "local-slot";
+                case PlaceKind::GlobalSlot: return "global-slot";
                 case PlaceKind::FieldPath: return "field-path";
                 case PlaceKind::IndexPath: return "index-path";
                 case PlaceKind::SubView: return "subview";
@@ -130,6 +148,9 @@ namespace parus::goir {
                 } else if constexpr (std::is_same_v<T, OpLocalSlot>) {
                     os << "local.slot";
                     if (data.debug_name != kInvalidId) os << " $" << module.string(data.debug_name);
+                } else if constexpr (std::is_same_v<T, OpGlobalSlot>) {
+                    const auto& global = module.globals[data.global];
+                    os << "global.slot @" << module.string(global.name);
                 } else if constexpr (std::is_same_v<T, OpFieldPlace>) {
                     os << "field.place %" << data.base << "." << module.string(data.field_name);
                 } else if constexpr (std::is_same_v<T, OpIndexPlace>) {
@@ -160,6 +181,9 @@ namespace parus::goir {
                 } else if constexpr (std::is_same_v<T, OpCallDirect>) {
                     os << "call.direct @" << module.string(module.realizations[data.callee].name);
                     print_block_args_(os, data.args);
+                } else if constexpr (std::is_same_v<T, OpCallExtern>) {
+                    os << "call.extern @" << module.string(module.realizations[data.callee].name);
+                    print_block_args_(os, data.args);
                 }
             }, inst.data);
             os << "\n";
@@ -175,11 +199,29 @@ namespace parus::goir {
             os << "  computation @" << module.string(comp.name)
                << " sig=@" << module.string(module.semantic_sigs[comp.sig].name) << "\n";
         }
+        for (size_t i = 0; i < module.globals.size(); ++i) {
+            const auto& global = module.globals[i];
+            os << "  global @" << module.string(global.name)
+               << " abi=" << abi_name_(global.abi_kind)
+               << " linkage=" << linkage_name_(global.linkage)
+               << " type=" << type_name_(global.type, types);
+            if (global.link_name != kInvalidId && global.link_name != global.name) {
+                os << " link_name=\"" << module.string(global.link_name) << "\"";
+            }
+            if (global.runtime_init_needed) os << " runtime-init";
+            os << "\n";
+        }
         for (size_t i = 0; i < module.realizations.size(); ++i) {
             const auto& real = module.realizations[i];
             os << "  realization @" << module.string(real.name)
                << " family=" << family_name_(real.family)
-               << " entry=%" << real.entry << "\n";
+               << " abi=" << abi_name_(real.abi_kind)
+               << " linkage=" << linkage_name_(real.linkage)
+               << " entry=%" << real.entry;
+            if (real.link_name != kInvalidId && real.link_name != real.name) {
+                os << " link_name=\"" << module.string(real.link_name) << "\"";
+            }
+            os << "\n";
             for (const auto bid : real.blocks) {
                 const auto& block = module.blocks[bid];
                 os << "    block ^bb" << bid;

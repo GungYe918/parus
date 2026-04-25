@@ -1,5 +1,6 @@
 #include <parus/backend/mlir/GOIRMLIRLowering.hpp>
 
+#include <parus/backend/aot/LLVMIRLowering.hpp>
 #include <parus/goir/Verify.hpp>
 
 #include <mlir/Conversion/Passes.h>
@@ -21,6 +22,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include <algorithm>
 #include <cctype>
 #include <optional>
 #include <string>
@@ -187,6 +189,45 @@ namespace parus::backend::mlir {
             return out.empty() ? std::string("0.0") : out;
         }
 
+        std::optional<uint32_t> parse_char_literal_code_(std::string_view text) {
+            auto is_hex_digit_local = [](char c) {
+                return (c >= '0' && c <= '9') ||
+                       (c >= 'a' && c <= 'f') ||
+                       (c >= 'A' && c <= 'F');
+            };
+            auto hex_digit_value_local = [](char c) -> uint8_t {
+                if (c >= '0' && c <= '9') return static_cast<uint8_t>(c - '0');
+                if (c >= 'a' && c <= 'f') return static_cast<uint8_t>(10 + (c - 'a'));
+                if (c >= 'A' && c <= 'F') return static_cast<uint8_t>(10 + (c - 'A'));
+                return 0;
+            };
+            if (text.size() < 3 || text.front() != '\'' || text.back() != '\'') return std::nullopt;
+            const auto body = text.substr(1, text.size() - 2);
+            if (body.empty()) return std::nullopt;
+            if (body[0] != '\\') {
+                if (body.size() != 1) return std::nullopt;
+                return static_cast<uint32_t>(static_cast<unsigned char>(body[0]));
+            }
+            if (body.size() == 2) {
+                switch (body[1]) {
+                    case 'n': return static_cast<uint32_t>('\n');
+                    case 'r': return static_cast<uint32_t>('\r');
+                    case 't': return static_cast<uint32_t>('\t');
+                    case '\\': return static_cast<uint32_t>('\\');
+                    case '\'': return static_cast<uint32_t>('\'');
+                    case '0': return static_cast<uint32_t>('\0');
+                    default: return std::nullopt;
+                }
+            }
+            if (body.size() == 4 && body[1] == 'x' &&
+                is_hex_digit_local(body[2]) && is_hex_digit_local(body[3])) {
+                const uint8_t hi = hex_digit_value_local(body[2]);
+                const uint8_t lo = hex_digit_value_local(body[3]);
+                return static_cast<uint32_t>((hi << 4) | lo);
+            }
+            return std::nullopt;
+        }
+
         bool starts_with_(std::string_view s, std::string_view pfx) {
             return s.size() >= pfx.size() && s.substr(0, pfx.size()) == pfx;
         }
@@ -324,6 +365,7 @@ namespace parus::backend::mlir {
                 os << "module {\n";
                 collect_text_globals_();
                 emit_text_globals_(os);
+                emit_globals_(os);
                 for (size_t i = 0; i < module_.realizations.size(); ++i) {
                     const auto& real = module_.realizations[i];
                     if (real.family != parus::goir::FamilyKind::Cpu &&
@@ -367,6 +409,8 @@ namespace parus::backend::mlir {
                 std::string container_type{};
                 std::string element_type{};
                 parus::goir::LayoutClass layout = parus::goir::LayoutClass::Unknown;
+                parus::ty::TypeId storage_type = parus::ty::kInvalidType;
+                bool host_abi_bytes = false;
                 std::vector<std::string> indices{};
             };
 
@@ -423,6 +467,11 @@ namespace parus::backend::mlir {
                 return module_.find_record_layout(ty);
             }
 
+            bool is_layout_c_record_(parus::ty::TypeId ty) const {
+                const auto* layout = record_layout_(ty);
+                return layout != nullptr && layout->layout == parus::sir::FieldLayout::kC;
+            }
+
             bool is_text_(parus::ty::TypeId ty) const {
                 return is_builtin_(types_, ty, parus::ty::Builtin::kText);
             }
@@ -447,6 +496,120 @@ namespace parus::backend::mlir {
                 return tag_enum_storage_type_(ty).has_value();
             }
 
+            std::optional<uint32_t> c_abi_align_(parus::ty::TypeId ty) const {
+                if (ty == parus::ty::kInvalidType) return std::nullopt;
+                if (const auto builtin = builtin_of_(types_, ty); builtin.has_value()) {
+                    using B = parus::ty::Builtin;
+                    switch (*builtin) {
+                        case B::kBool:
+                        case B::kI8:
+                        case B::kU8:
+                            return uint32_t{1};
+                        case B::kI16:
+                        case B::kU16:
+                            return uint32_t{2};
+                        case B::kChar:
+                        case B::kI32:
+                        case B::kU32:
+                        case B::kF32:
+                            return uint32_t{4};
+                        case B::kI64:
+                        case B::kU64:
+                        case B::kISize:
+                        case B::kUSize:
+                        case B::kF64:
+                            return uint32_t{8};
+                        case B::kUnit:
+                            return uint32_t{1};
+                        default:
+                            return std::nullopt;
+                    }
+                }
+                if (const auto tag_ty = tag_enum_storage_type_(ty); tag_ty.has_value()) {
+                    return c_abi_align_(*tag_ty);
+                }
+                const auto* layout = record_layout_(ty);
+                if (layout == nullptr || layout->layout != parus::sir::FieldLayout::kC) return std::nullopt;
+                uint32_t max_align = 1;
+                for (const auto& field : layout->fields) {
+                    const auto field_align = c_abi_align_(field.type);
+                    if (!field_align.has_value()) return std::nullopt;
+                    max_align = std::max(max_align, *field_align);
+                }
+                if (layout->align != 0) max_align = std::max(max_align, layout->align);
+                return max_align;
+            }
+
+            std::optional<size_t> c_abi_size_(parus::ty::TypeId ty) const {
+                if (ty == parus::ty::kInvalidType) return std::nullopt;
+                if (const auto builtin = builtin_of_(types_, ty); builtin.has_value()) {
+                    using B = parus::ty::Builtin;
+                    switch (*builtin) {
+                        case B::kBool:
+                        case B::kI8:
+                        case B::kU8:
+                            return size_t{1};
+                        case B::kI16:
+                        case B::kU16:
+                            return size_t{2};
+                        case B::kChar:
+                        case B::kI32:
+                        case B::kU32:
+                        case B::kF32:
+                            return size_t{4};
+                        case B::kI64:
+                        case B::kU64:
+                        case B::kISize:
+                        case B::kUSize:
+                        case B::kF64:
+                            return size_t{8};
+                        case B::kUnit:
+                            return size_t{0};
+                        default:
+                            return std::nullopt;
+                    }
+                }
+                if (const auto tag_ty = tag_enum_storage_type_(ty); tag_ty.has_value()) {
+                    return c_abi_size_(*tag_ty);
+                }
+                const auto* layout = record_layout_(ty);
+                if (layout == nullptr || layout->layout != parus::sir::FieldLayout::kC) return std::nullopt;
+                size_t size = 0;
+                uint32_t struct_align = 1;
+                for (const auto& field : layout->fields) {
+                    const auto field_align = c_abi_align_(field.type);
+                    const auto field_size = c_abi_size_(field.type);
+                    if (!field_align.has_value() || !field_size.has_value()) return std::nullopt;
+                    struct_align = std::max(struct_align, *field_align);
+                    const size_t rem = size % *field_align;
+                    if (rem != 0) size += (*field_align - rem);
+                    size += *field_size;
+                }
+                if (layout->align != 0) struct_align = std::max(struct_align, layout->align);
+                const size_t rem = size % struct_align;
+                if (rem != 0) size += (struct_align - rem);
+                return size;
+            }
+
+            std::optional<std::pair<size_t, parus::ty::TypeId>> c_abi_field_offset_(parus::ty::TypeId record_ty,
+                                                                                      parus::goir::StringId field_name) const {
+                const auto* layout = record_layout_(record_ty);
+                if (layout == nullptr || layout->layout != parus::sir::FieldLayout::kC) return std::nullopt;
+                size_t offset = 0;
+                for (const auto& field : layout->fields) {
+                    const auto field_align = c_abi_align_(field.type);
+                    const auto field_size = c_abi_size_(field.type);
+                    if (!field_align.has_value() || !field_size.has_value()) return std::nullopt;
+                    const size_t rem = offset % *field_align;
+                    if (rem != 0) offset += (*field_align - rem);
+                    if (field.name == field_name) {
+                        return std::make_pair(offset, field.type);
+                    }
+                    offset += *field_size;
+                }
+                return std::nullopt;
+            }
+
             std::optional<std::string> scalar_like_type_(parus::ty::TypeId ty) const {
                 if (const auto scalar = mlir_scalar_type_(types_, ty); scalar.has_value()) {
                     return scalar;
@@ -455,6 +618,29 @@ namespace parus::backend::mlir {
                     return mlir_scalar_type_(types_, *tag_ty);
                 }
                 return std::nullopt;
+            }
+
+            parus::goir::LayoutClass classify_layout_(parus::ty::TypeId ty) const {
+                if (ty == parus::ty::kInvalidType) return parus::goir::LayoutClass::Unknown;
+                const auto& t = types_.get(ty);
+                switch (t.kind) {
+                    case parus::ty::Kind::kBuiltin:
+                        if (t.builtin == parus::ty::Builtin::kText) return parus::goir::LayoutClass::TextView;
+                        return mlir_scalar_type_(types_, ty).has_value()
+                            ? parus::goir::LayoutClass::Scalar
+                            : parus::goir::LayoutClass::Unknown;
+                    case parus::ty::Kind::kOptional:
+                        return parus::goir::LayoutClass::OptionalScalar;
+                    case parus::ty::Kind::kArray:
+                        return t.array_has_size ? parus::goir::LayoutClass::FixedArray
+                                                : parus::goir::LayoutClass::SliceView;
+                    case parus::ty::Kind::kNamedUser:
+                        if (is_tag_enum_(ty)) return parus::goir::LayoutClass::TagEnum;
+                        return record_layout_(ty) != nullptr ? parus::goir::LayoutClass::PlainRecord
+                                                             : parus::goir::LayoutClass::Unknown;
+                    default:
+                        return parus::goir::LayoutClass::Unknown;
+                }
             }
 
             bool is_integer_like_(parus::ty::TypeId ty) const {
@@ -512,6 +698,11 @@ namespace parus::backend::mlir {
                     return "!llvm.array<" + std::to_string(t.array_size) + " x " + *elem + ">";
                 }
                 if (const auto* layout = record_layout_(ty); layout != nullptr) {
+                    if (layout->layout == parus::sir::FieldLayout::kC) {
+                        const auto size = c_abi_size_(ty);
+                        if (!size.has_value()) return std::nullopt;
+                        return "!llvm.array<" + std::to_string(*size) + " x i8>";
+                    }
                     std::string out = "!llvm.struct<(";
                     for (size_t i = 0; i < layout->fields.size(); ++i) {
                         if (i != 0) out += ", ";
@@ -553,6 +744,96 @@ namespace parus::backend::mlir {
                     os << "  llvm.mlir.global internal constant @" << global.symbol
                        << "(\"" << global.escaped_bytes << "\") : !llvm.array<"
                        << storage_len << " x i8>\n";
+                }
+            }
+
+            std::string global_symbol_(const parus::goir::GGlobal& global) const {
+                if (global.link_name != parus::goir::kInvalidId) {
+                    return std::string(module_.string(global.link_name));
+                }
+                return std::string(module_.string(global.name));
+            }
+
+            void emit_zero_global_(llvm::raw_ostream& os,
+                                   std::string_view symbol,
+                                   std::string_view storage_ty,
+                                   bool constant) {
+                os << "  llvm.mlir.global internal ";
+                if (constant) os << "constant ";
+                os << "@" << symbol << "() : " << storage_ty << " {\n";
+                os << "    %0 = llvm.mlir.zero : " << storage_ty << "\n";
+                os << "    llvm.return %0 : " << storage_ty << "\n";
+                os << "  }\n";
+            }
+
+            void emit_const_global_(llvm::raw_ostream& os, const parus::goir::GGlobal& global) {
+                const auto storage_ty = llvm_type_(global.type);
+                if (!storage_ty.has_value()) {
+                    fail_("constant global lowering requires an LLVM-compatible storage type");
+                    return;
+                }
+
+                if (global.folded_const_init.kind == parus::sir::ConstInitKind::kNone) {
+                    fail_("constant global lowering currently requires folded scalar init metadata");
+                    return;
+                }
+
+                os << "  llvm.mlir.global internal constant @" << global_symbol_(global)
+                   << "() : " << *storage_ty << " {\n";
+                switch (global.folded_const_init.kind) {
+                    case parus::sir::ConstInitKind::kInt:
+                        os << "    %0 = llvm.mlir.constant(" << sanitize_int_literal_(global.folded_const_init.text)
+                           << " : " << *storage_ty << ") : " << *storage_ty << "\n";
+                        break;
+                    case parus::sir::ConstInitKind::kFloat:
+                        os << "    %0 = llvm.mlir.constant(" << sanitize_float_literal_(global.folded_const_init.text)
+                           << " : " << *storage_ty << ") : " << *storage_ty << "\n";
+                        break;
+                    case parus::sir::ConstInitKind::kBool:
+                        os << "    %0 = llvm.mlir.constant(" << ((global.folded_const_init.text == "true" || global.folded_const_init.text == "1") ? "1" : "0")
+                           << " : " << *storage_ty << ") : " << *storage_ty << "\n";
+                        break;
+                    case parus::sir::ConstInitKind::kChar: {
+                        const auto ch = parse_char_literal_code_(global.folded_const_init.text);
+                        if (!ch.has_value()) {
+                            fail_("constant global lowering could not decode char literal");
+                            return;
+                        }
+                        os << "    %0 = llvm.mlir.constant(" << *ch
+                           << " : " << *storage_ty << ") : " << *storage_ty << "\n";
+                        break;
+                    }
+                    case parus::sir::ConstInitKind::kNone:
+                    default:
+                        fail_("unsupported folded constant global kind");
+                        return;
+                }
+                os << "    llvm.return %0 : " << *storage_ty << "\n";
+                os << "  }\n";
+            }
+
+            void emit_globals_(llvm::raw_ostream& os) {
+                for (const auto& global : module_.globals) {
+                    const auto storage_ty = llvm_type_(global.type);
+                    if (!storage_ty.has_value()) {
+                        fail_("global lowering requires an LLVM-compatible storage type");
+                        return;
+                    }
+
+                    if (global.linkage == parus::goir::LinkageKind::External) {
+                        os << "  llvm.mlir.global external @" << global_symbol_(global)
+                           << "() : " << *storage_ty << "\n";
+                        continue;
+                    }
+
+                    if (global.is_const) {
+                        emit_const_global_(os, global);
+                        if (failed_) return;
+                        continue;
+                    }
+
+                    emit_zero_global_(os, global_symbol_(global), *storage_ty, /*constant=*/false);
+                    if (failed_) return;
                 }
             }
 
@@ -714,6 +995,64 @@ namespace parus::backend::mlir {
                 };
             }
 
+            std::optional<PlaceInfo> record_field_place_(llvm::raw_ostream& os,
+                                                         const PlaceInfo& base,
+                                                         parus::ty::TypeId record_ty,
+                                                         parus::goir::StringId field_name,
+                                                         parus::goir::LayoutClass field_layout) {
+                const auto field_info = record_field_index_(record_ty, field_name);
+                if (!field_info.has_value()) {
+                    fail_("field.place requires a known frozen record field.");
+                    return std::nullopt;
+                }
+                const auto field_ty = llvm_type_(field_info->second);
+                if (!field_ty.has_value()) {
+                    fail_("field.place requires an LLVM-compatible field type.");
+                    return std::nullopt;
+                }
+
+                if (base.host_abi_bytes || is_layout_c_record_(record_ty)) {
+                    const auto offset = c_abi_field_offset_(record_ty, field_name);
+                    const auto storage_ty = llvm_type_(record_ty);
+                    if (!offset.has_value() || !storage_ty.has_value()) {
+                        fail_("layout(c) field.place requires ABI size/offset metadata.");
+                        return std::nullopt;
+                    }
+                    const auto ptr = make_temp_();
+                    os << "    " << ptr << " = llvm.getelementptr " << base.ref << "[0, "
+                       << offset->first << "] : (!llvm.ptr) -> !llvm.ptr, " << *storage_ty << "\n";
+                    return PlaceInfo{
+                        .kind = PlaceInfo::Kind::LlvmPtr,
+                        .ref = ptr,
+                        .container_type = *storage_ty,
+                        .element_type = *field_ty,
+                        .layout = field_layout,
+                        .storage_type = field_info->second,
+                        .host_abi_bytes = is_layout_c_record_(field_info->second),
+                        .indices = {},
+                    };
+                }
+
+                const auto llvm_record_ty = llvm_type_(record_ty);
+                if (!llvm_record_ty.has_value()) {
+                    fail_("field.place requires a known record LLVM type.");
+                    return std::nullopt;
+                }
+                const auto ptr = make_temp_();
+                os << "    " << ptr << " = llvm.getelementptr " << base.ref << "[0, " << field_info->first
+                   << "] : (!llvm.ptr) -> !llvm.ptr, " << *llvm_record_ty << "\n";
+                return PlaceInfo{
+                    .kind = PlaceInfo::Kind::LlvmPtr,
+                    .ref = ptr,
+                    .container_type = "!llvm.ptr",
+                    .element_type = *field_ty,
+                    .layout = field_layout,
+                    .storage_type = field_info->second,
+                    .host_abi_bytes = false,
+                    .indices = {},
+                };
+            }
+
             void emit_record_literal_store_(llvm::raw_ostream& os,
                                             const PlaceInfo& place,
                                             parus::goir::ValueId value,
@@ -743,16 +1082,21 @@ namespace parus::backend::mlir {
                         fail_("record.make is missing a field required by the frozen layout.");
                         return;
                     }
-                    const auto field_ty = llvm_type_(field.type);
-                    if (!field_ty.has_value()) {
-                        fail_("record field lowering only supports scalar/aggregate LLVM-compatible fields.");
-                        return;
+                    const auto field_place = record_field_place_(
+                        os,
+                        place,
+                        record_ty,
+                        field.name,
+                        classify_layout_(field.type)
+                    );
+                    if (!field_place.has_value()) return;
+                    if (classify_layout_(field.type) == parus::goir::LayoutClass::PlainRecord) {
+                        emit_record_literal_store_(os, *field_place, it->value, field.type);
+                        if (failed_) return;
+                        continue;
                     }
-                    const auto gep = make_temp_();
-                    os << "    " << gep << " = llvm.getelementptr " << place.ref << "[0, " << i << "] : "
-                       << "(!llvm.ptr) -> !llvm.ptr, " << *llvm_record_ty << "\n";
-                    os << "    llvm.store " << value_name_(it->value) << ", " << gep
-                       << " : " << *field_ty << ", !llvm.ptr\n";
+                    os << "    llvm.store " << value_name_(it->value) << ", " << field_place->ref
+                       << " : " << field_place->element_type << ", !llvm.ptr\n";
                 }
             }
 
@@ -920,6 +1264,7 @@ namespace parus::backend::mlir {
                         .container_type = *memref_ty,
                         .element_type = elem_ty,
                         .layout = layout,
+                        .storage_type = ty,
                         .indices = {},
                     });
                     return;
@@ -944,6 +1289,8 @@ namespace parus::backend::mlir {
                         .container_type = "!llvm.ptr",
                         .element_type = *llvm_ty,
                         .layout = layout,
+                        .storage_type = ty,
+                        .host_abi_bytes = is_layout_c_record_(ty),
                         .indices = {},
                     });
                     return;
@@ -1241,6 +1588,26 @@ namespace parus::backend::mlir {
                         // Record values remain semantic until consumed by store.
                     } else if constexpr (std::is_same_v<T, parus::goir::OpLocalSlot>) {
                         emit_local_slot_(os, inst.result, module_.values[inst.result].layout);
+                    } else if constexpr (std::is_same_v<T, parus::goir::OpGlobalSlot>) {
+                        const auto& global = module_.globals[data.global];
+                        const auto storage_ty = llvm_type_(global.type);
+                        if (!storage_ty.has_value()) {
+                            fail_("global.slot lowering requires an LLVM-compatible storage type.");
+                            return;
+                        }
+                        const auto addr = make_temp_();
+                        os << "    " << addr << " = llvm.mlir.addressof @" << global_symbol_(global)
+                           << " : !llvm.ptr\n";
+                        set_place_info_(inst.result, PlaceInfo{
+                            .kind = PlaceInfo::Kind::LlvmPtr,
+                            .ref = addr,
+                            .container_type = *storage_ty,
+                            .element_type = *storage_ty,
+                            .layout = module_.values[inst.result].layout,
+                            .storage_type = global.type,
+                            .host_abi_bytes = is_layout_c_record_(global.type),
+                            .indices = {},
+                        });
                     } else if constexpr (std::is_same_v<T, parus::goir::OpFieldPlace>) {
                         const auto base = place_info_(data.base);
                         if (!base.has_value() || base->kind != PlaceInfo::Kind::LlvmPtr) {
@@ -1248,24 +1615,15 @@ namespace parus::backend::mlir {
                             return;
                         }
                         const auto base_record_ty = module_.values[data.base].place_elem_type;
-                        const auto field_info = record_field_index_(base_record_ty, data.field_name);
-                        const auto llvm_record_ty = llvm_type_(base_record_ty);
-                        const auto field_ty = field_info.has_value() ? llvm_type_(field_info->second) : std::nullopt;
-                        if (!field_info.has_value() || !llvm_record_ty.has_value() || !field_ty.has_value()) {
-                            fail_("field.place requires a known frozen record field.");
-                            return;
-                        }
-                        const auto ptr = make_temp_();
-                        os << "    " << ptr << " = llvm.getelementptr " << base->ref << "[0, " << field_info->first
-                           << "] : (!llvm.ptr) -> !llvm.ptr, " << *llvm_record_ty << "\n";
-                        set_place_info_(inst.result, PlaceInfo{
-                            .kind = PlaceInfo::Kind::LlvmPtr,
-                            .ref = ptr,
-                            .container_type = "!llvm.ptr",
-                            .element_type = *field_ty,
-                            .layout = module_.values[inst.result].layout,
-                            .indices = {},
-                        });
+                        const auto field_place = record_field_place_(
+                            os,
+                            *base,
+                            base_record_ty,
+                            data.field_name,
+                            module_.values[inst.result].layout
+                        );
+                        if (!field_place.has_value()) return;
+                        set_place_info_(inst.result, *field_place);
                     } else if constexpr (std::is_same_v<T, parus::goir::OpIndexPlace>) {
                         const auto base = place_info_(data.base);
                         if (!base.has_value() || base->kind != PlaceInfo::Kind::MemRef) {
@@ -1343,6 +1701,43 @@ namespace parus::backend::mlir {
                         }
                     } else if constexpr (std::is_same_v<T, parus::goir::OpSemanticInvoke>) {
                         fail_("placed MLIR lowering cannot see semantic invokes");
+                    } else if constexpr (std::is_same_v<T, parus::goir::OpCallExtern>) {
+                        const auto& callee = module_.realizations[data.callee];
+                        const auto sig_id = module_.computations[callee.computation].sig;
+                        const auto& sig = module_.semantic_sigs[sig_id];
+                        std::string args{};
+                        std::string arg_types{};
+                        for (size_t i = 0; i < data.args.size(); ++i) {
+                            if (i != 0) {
+                                args += ", ";
+                                arg_types += ", ";
+                            }
+                            args += value_name_(data.args[i]);
+                            const auto arg_ty = (i < sig.param_types.size()) ? sig.param_types[i] : module_.values[data.args[i]].ty;
+                            const auto mlir_ty = llvm_type_(arg_ty);
+                            if (!mlir_ty.has_value()) {
+                                fail_("extern call lowering requires LLVM-compatible host ABI arguments.");
+                                return;
+                            }
+                            arg_types += *mlir_ty;
+                        }
+                        const auto callee_name = std::string(
+                            callee.link_name != parus::goir::kInvalidId
+                                ? module_.string(callee.link_name)
+                                : module_.string(callee.name)
+                        );
+                        if (inst.result != parus::goir::kInvalidId) {
+                            const auto result_ty = llvm_type_(sig.result_type);
+                            if (!result_ty.has_value()) {
+                                fail_("extern call lowering requires an LLVM-compatible host ABI result.");
+                                return;
+                            }
+                            os << "    " << value_name_(inst.result) << " = llvm.call @" << callee_name
+                               << "(" << args << ") : (" << arg_types << ") -> " << *result_ty << "\n";
+                        } else {
+                            os << "    llvm.call @" << callee_name << "(" << args << ") : ("
+                               << arg_types << ") -> ()\n";
+                        }
                     }
                 }, inst.data);
             }
@@ -1423,6 +1818,36 @@ namespace parus::backend::mlir {
                     return;
                 }
 
+                const auto symbol = std::string(
+                    real.link_name != parus::goir::kInvalidId
+                        ? module_.string(real.link_name)
+                        : module_.string(real.name)
+                );
+
+                if (real.linkage == parus::goir::LinkageKind::External) {
+                    os << "  llvm.func @" << symbol << "(";
+                    for (size_t i = 0; i < sig.param_types.size(); ++i) {
+                        if (i != 0) os << ", ";
+                        const auto llvm_ty = llvm_type_(sig.param_types[i]);
+                        if (!llvm_ty.has_value()) {
+                            fail_("external host ABI declaration requires LLVM-compatible parameter types");
+                            return;
+                        }
+                        os << *llvm_ty;
+                    }
+                    os << ")";
+                    if (!is_unit_(sig.result_type)) {
+                        const auto llvm_ret_ty = llvm_type_(sig.result_type);
+                        if (!llvm_ret_ty.has_value()) {
+                            fail_("external host ABI declaration requires an LLVM-compatible result type");
+                            return;
+                        }
+                        os << " -> " << *llvm_ret_ty;
+                    }
+                    os << "\n";
+                    return;
+                }
+
                 if (real.entry == parus::goir::kInvalidId || static_cast<size_t>(real.entry) >= module_.blocks.size()) {
                     fail_("realization has invalid entry block");
                     return;
@@ -1446,7 +1871,7 @@ namespace parus::backend::mlir {
                     }
                 }
 
-                os << "  func.func @" << module_.string(real.name) << "(";
+                os << "  func.func @" << symbol << "(";
                 for (size_t i = 0; i < entry.params.size(); ++i) {
                     if (i != 0) os << ", ";
                     const auto mlir_ty = mlir_value_type_(module_.values[entry.params[i]].ty);
@@ -1497,6 +1922,156 @@ namespace parus::backend::mlir {
                                                                  ::mlir::MLIRContext& context) {
             ::mlir::ParserConfig config(&context);
             return ::mlir::parseSourceString<::mlir::ModuleOp>(mlir_text, config, "parus-goir");
+        }
+
+        const parus::goir::RecordLayout* find_record_layout_(const parus::goir::Module& module,
+                                                             parus::ty::TypeId ty) {
+            return module.find_record_layout(ty);
+        }
+
+        std::optional<uint32_t> host_abi_align_(const parus::goir::Module& module,
+                                                const parus::ty::TypePool& types,
+                                                parus::ty::TypeId ty) {
+            if (ty == parus::ty::kInvalidType) return std::nullopt;
+            const auto& t = types.get(ty);
+            using B = parus::ty::Builtin;
+            if (t.kind == parus::ty::Kind::kBuiltin) {
+                switch (t.builtin) {
+                    case B::kBool:
+                    case B::kI8:
+                    case B::kU8:
+                        return uint32_t{1};
+                    case B::kI16:
+                    case B::kU16:
+                        return uint32_t{2};
+                    case B::kChar:
+                    case B::kI32:
+                    case B::kU32:
+                    case B::kF32:
+                        return uint32_t{4};
+                    case B::kI64:
+                    case B::kU64:
+                    case B::kISize:
+                    case B::kUSize:
+                    case B::kF64:
+                        return uint32_t{8};
+                    case B::kUnit:
+                        return uint32_t{1};
+                    default:
+                        return std::nullopt;
+                }
+            }
+            if (t.kind == parus::ty::Kind::kNamedUser) {
+                const auto* layout = find_record_layout_(module, ty);
+                if (layout != nullptr && layout->fields.size() == 1 &&
+                    module.string(layout->fields[0].name) == "__tag") {
+                    return host_abi_align_(module, types, layout->fields[0].type);
+                }
+                if (layout == nullptr || layout->layout != parus::sir::FieldLayout::kC) return std::nullopt;
+                uint32_t max_align = 1;
+                for (const auto& field : layout->fields) {
+                    const auto field_align = host_abi_align_(module, types, field.type);
+                    if (!field_align.has_value()) return std::nullopt;
+                    max_align = std::max(max_align, *field_align);
+                }
+                if (layout->align != 0) max_align = std::max(max_align, layout->align);
+                return max_align;
+            }
+            return std::nullopt;
+        }
+
+        std::string llvm_callconv_prefix_(parus::sir::CCallConv cc) {
+            using CC = parus::sir::CCallConv;
+            switch (cc) {
+                case CC::kStdCall: return "x86_stdcallcc ";
+                case CC::kFastCall: return "x86_fastcallcc ";
+                case CC::kVectorCall: return "x86_vectorcallcc ";
+                case CC::kWin64: return "win64cc ";
+                case CC::kSysV: return "x86_64_sysvcc ";
+                case CC::kCdecl:
+                case CC::kDefault:
+                default:
+                    return "";
+            }
+        }
+
+        std::string patch_host_abi_llvm_ir_(const parus::goir::Module& module,
+                                            const parus::ty::TypePool& types,
+                                            std::string llvm_ir) {
+            auto patch_prefixed_symbol = [&](const std::string& symbol, std::string_view prefix) {
+                if (prefix.empty()) return;
+                const std::string decl = "declare ";
+                const std::string def = "define ";
+                const std::string call = "call ";
+                const std::string needle = " @" + symbol + "(";
+
+                size_t pos = 0;
+                while (pos < llvm_ir.size()) {
+                    const size_t line_end = llvm_ir.find('\n', pos);
+                    const size_t end = (line_end == std::string::npos) ? llvm_ir.size() : line_end;
+                    std::string_view line(llvm_ir.data() + pos, end - pos);
+                    if (line.starts_with(decl) && line.find(needle) != std::string_view::npos &&
+                        line.find(prefix) == std::string_view::npos) {
+                        llvm_ir.insert(pos + decl.size(), prefix);
+                        pos += prefix.size();
+                    } else if (line.starts_with(def) && line.find(needle) != std::string_view::npos &&
+                               line.find(prefix) == std::string_view::npos) {
+                        llvm_ir.insert(pos + def.size(), prefix);
+                        pos += prefix.size();
+                    } else {
+                        const auto call_at = line.find(call);
+                        const auto sym_at = line.find("@" + symbol + "(");
+                        if (call_at != std::string_view::npos &&
+                            sym_at != std::string_view::npos &&
+                            line.find(prefix, call_at) == std::string_view::npos) {
+                            llvm_ir.insert(pos + call_at + call.size(), prefix);
+                            pos += prefix.size();
+                        }
+                    }
+                    pos = (line_end == std::string::npos) ? llvm_ir.size() : (line_end + 1);
+                }
+            };
+
+            auto patch_global_align = [&](const std::string& symbol, uint32_t align) {
+                if (align <= 1) return;
+                const std::string needle = "@" + symbol + " = ";
+                size_t pos = 0;
+                while ((pos = llvm_ir.find(needle, pos)) != std::string::npos) {
+                    const size_t line_end = llvm_ir.find('\n', pos);
+                    const size_t end = (line_end == std::string::npos) ? llvm_ir.size() : line_end;
+                    std::string_view line(llvm_ir.data() + pos, end - pos);
+                    if (line.find(" align ") == std::string_view::npos) {
+                        llvm_ir.insert(end, ", align " + std::to_string(align));
+                    }
+                    pos = (line_end == std::string::npos) ? llvm_ir.size() : (line_end + 1);
+                }
+            };
+
+            for (const auto& real : module.realizations) {
+                if (real.abi_kind != parus::goir::AbiKind::C) continue;
+                const auto prefix = llvm_callconv_prefix_(real.c_callconv);
+                if (prefix.empty()) continue;
+                const auto symbol = std::string(
+                    real.link_name != parus::goir::kInvalidId
+                        ? module.string(real.link_name)
+                        : module.string(real.name)
+                );
+                patch_prefixed_symbol(symbol, prefix);
+            }
+
+            for (const auto& global : module.globals) {
+                if (global.abi_kind != parus::goir::AbiKind::C) continue;
+                const auto align = host_abi_align_(module, types, global.type);
+                if (!align.has_value()) continue;
+                const auto symbol = std::string(
+                    global.link_name != parus::goir::kInvalidId
+                        ? module.string(global.link_name)
+                        : module.string(global.name)
+                );
+                patch_global_align(symbol, *align);
+            }
+
+            return llvm_ir;
         }
 
     } // namespace
@@ -1573,7 +2148,39 @@ namespace parus::backend::mlir {
         os.flush();
 
         out.ok = true;
-        out.llvm_ir = std::move(llvm_ir);
+        out.llvm_ir = patch_host_abi_llvm_ir_(module, types, std::move(llvm_ir));
+        return out;
+    }
+
+    GOIRObjectEmissionResult emit_object_from_goir_via_mlir(
+        const parus::goir::Module& module,
+        const parus::ty::TypePool& types,
+        const GOIRLoweringOptions& lowering_options,
+        const std::string& output_path,
+        const std::string& target_triple,
+        const std::string& cpu,
+        uint8_t opt_level
+    ) {
+        GOIRObjectEmissionResult out{};
+
+        auto lowered = lower_goir_to_llvm_ir_text(module, types, lowering_options);
+        out.mlir_text = std::move(lowered.mlir_text);
+        out.llvm_ir = std::move(lowered.llvm_ir);
+        out.messages = std::move(lowered.messages);
+        if (!lowered.ok) return out;
+
+        const auto emitted = parus::backend::aot::emit_object_from_llvm_ir_text(
+            out.llvm_ir,
+            output_path,
+            parus::backend::aot::LLVMObjectEmissionOptions{
+                .llvm_lane_major = lowering_options.llvm_lane_major,
+                .target_triple = target_triple,
+                .cpu = cpu,
+                .opt_level = opt_level,
+            }
+        );
+        out.messages.insert(out.messages.end(), emitted.messages.begin(), emitted.messages.end());
+        out.ok = emitted.ok;
         return out;
     }
 

@@ -7912,9 +7912,11 @@ namespace parusc::p0 {
 
         const bool wants_goir_open =
             opt.has_xparus && (opt.internal.goir_dump || opt.internal.goir_placed_dump
-                || opt.internal.emit_goir_mlir || opt.internal.emit_goir_llvm_ir);
+                || opt.internal.emit_goir_mlir || opt.internal.emit_goir_llvm_ir
+                || opt.internal.emit_goir_object);
         const bool wants_goir_output =
-            opt.has_xparus && (opt.internal.emit_goir_mlir || opt.internal.emit_goir_llvm_ir);
+            opt.has_xparus && (opt.internal.emit_goir_mlir || opt.internal.emit_goir_llvm_ir
+                || opt.internal.emit_goir_object);
 
         std::optional<parus::goir::BuildResult> goir_open_res{};
         std::optional<parus::goir::PlacementResult> goir_placed_res{};
@@ -7989,6 +7991,24 @@ namespace parusc::p0 {
                         std::cerr << "error: " << write_err << "\n";
                         return 1;
                     }
+                    return 0;
+                }
+                if (opt.internal.emit_goir_object) {
+                    auto emitted = parus::backend::mlir::emit_object_from_goir_via_mlir(
+                        goir_placed_res->mod,
+                        types,
+                        parus::backend::mlir::GOIRLoweringOptions{
+                            .llvm_lane_major = PARUS_MLIR_SELECTED_MAJOR,
+                        },
+                        opt.output_path,
+                        opt.target_triple,
+                        std::string{},
+                        opt.opt_level
+                    );
+                    for (const auto& msg : emitted.messages) {
+                        if (msg.is_error) std::cerr << "error: gOIR->object: " << msg.text << "\n";
+                    }
+                    if (!emitted.ok) return 1;
                     return 0;
                 }
 #else

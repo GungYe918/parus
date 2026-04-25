@@ -20,6 +20,7 @@ namespace parus::goir {
     using RealizationId = uint32_t;
     using PlacementPolicyId = uint32_t;
     using ServiceId = uint32_t;
+    using GlobalId = uint32_t;
     using BlockId = uint32_t;
     using InstId = uint32_t;
     using ValueId = uint32_t;
@@ -40,6 +41,17 @@ namespace parus::goir {
         HwStruct,
         HwFlow,
         Bridge,
+    };
+
+    enum class AbiKind : uint8_t {
+        Parus = 0,
+        C,
+    };
+
+    enum class LinkageKind : uint8_t {
+        Internal = 0,
+        External,
+        Exported,
     };
 
     enum class PlacementPolicyKind : uint8_t {
@@ -107,6 +119,7 @@ namespace parus::goir {
     enum class PlaceKind : uint8_t {
         None = 0,
         LocalSlot,
+        GlobalSlot,
         FieldPath,
         IndexPath,
         SubView,
@@ -147,6 +160,8 @@ namespace parus::goir {
 
     struct RecordLayout {
         TypeId self_type = kInvalidType;
+        parus::sir::FieldLayout layout = parus::sir::FieldLayout::kNone;
+        uint32_t align = 0;
         std::vector<RecordField> fields{};
     };
 
@@ -211,6 +226,10 @@ namespace parus::goir {
         StringId debug_name = kInvalidId;
     };
 
+    struct OpGlobalSlot {
+        GlobalId global = kInvalidId;
+    };
+
     struct OpFieldPlace {
         ValueId base = kInvalidId;
         StringId field_name = kInvalidId;
@@ -272,6 +291,11 @@ namespace parus::goir {
         std::vector<ValueId> args{};
     };
 
+    struct OpCallExtern {
+        RealizationId callee = kInvalidId;
+        std::vector<ValueId> args{};
+    };
+
     using OpData = std::variant<
         OpConstInt,
         OpConstFloat,
@@ -286,6 +310,7 @@ namespace parus::goir {
         OpArrayLen,
         OpRecordMake,
         OpLocalSlot,
+        OpGlobalSlot,
         OpFieldPlace,
         OpIndexPlace,
         OpSubView,
@@ -299,7 +324,8 @@ namespace parus::goir {
         OpOptionalGet,
         OpEnumTag,
         OpSemanticInvoke,
-        OpCallDirect
+        OpCallDirect,
+        OpCallExtern
     >;
 
     struct Inst {
@@ -371,10 +397,32 @@ namespace parus::goir {
         std::vector<RealizationId> realizations{};
     };
 
+    struct GGlobal {
+        StringId name = kInvalidId;
+        StringId link_name = kInvalidId;
+        TypeId type = kInvalidType;
+        bool is_mutable = false;
+        bool is_const = false;
+        bool is_static = false;
+        bool is_extern = false;
+        bool is_export = false;
+        AbiKind abi_kind = AbiKind::Parus;
+        LinkageKind linkage = LinkageKind::Internal;
+        parus::sir::CThreadLocalKind tls_kind = parus::sir::CThreadLocalKind::kNone;
+        parus::sir::ConstInitData folded_const_init{};
+        bool runtime_init_needed = false;
+        uint32_t source_global = kInvalidId;
+    };
+
     struct GRealization {
         StringId name = kInvalidId;
         ComputationId computation = kInvalidId;
         FamilyKind family = FamilyKind::None;
+        AbiKind abi_kind = AbiKind::Parus;
+        LinkageKind linkage = LinkageKind::Internal;
+        StringId link_name = kInvalidId;
+        parus::sir::CCallConv c_callconv = parus::sir::CCallConv::kDefault;
+        bool is_c_variadic = false;
         bool is_entry = false;
         bool is_pure = true;
         bool is_extern = false;
@@ -396,6 +444,7 @@ namespace parus::goir {
         std::vector<GPlacementPolicy> placement_policies{};
         std::vector<GService> services{};
         std::vector<GComputation> computations{};
+        std::vector<GGlobal> globals{};
         std::vector<GRealization> realizations{};
 
         StringId add_string(std::string text) {
@@ -456,6 +505,11 @@ namespace parus::goir {
         ComputationId add_computation(const GComputation& computation) {
             computations.push_back(computation);
             return static_cast<ComputationId>(computations.size() - 1);
+        }
+
+        GlobalId add_global(const GGlobal& global) {
+            globals.push_back(global);
+            return static_cast<GlobalId>(globals.size() - 1);
         }
 
         RealizationId add_realization(const GRealization& realization) {

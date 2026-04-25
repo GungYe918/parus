@@ -45,6 +45,7 @@ namespace parusc::cli {
         bool emit_object = false;
         bool emit_goir_mlir = false;
         bool emit_goir_llvm_ir = false;
+        bool emit_goir_object = false;
     };
 
     /// @brief bundle-aware compile context for LEI orchestration.

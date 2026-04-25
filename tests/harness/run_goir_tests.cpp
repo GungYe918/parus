@@ -731,36 +731,84 @@ namespace {
         return ok;
     }
 
-    static bool test_goir_builder_rejects_extern_reference_lane_escape_() {
+    static bool test_goir_builder_accepts_host_abi_globals_and_calls_() {
         const std::string src = R"(
-            extern "C" def c_add(a: i32, b: i32) -> i32;
+            struct layout(c) align(16) Vec2 {
+                x: i32;
+                y: i32;
+            };
 
-            @pure def main() -> i32 {
-                return 0i32;
+            extern "C" def takes(v: Vec2) -> i32;
+            extern "C" static mut g_vec: Vec2;
+
+            static const G_CONST: i32 = 7i32;
+            static G_MUT: i32 = 9i32;
+
+            export "C" def pass(v: Vec2) -> i32 {
+                g_vec.x = G_CONST;
+                return takes(v) + G_MUT;
             }
         )";
 
         auto p = build_sir_pipeline_(src);
         bool ok = true;
-        ok &= require_(!p.prog.bag.has_error(), "extern rejection seed must parse/type-check cleanly");
-        ok &= require_(p.ty.errors.empty(), "extern rejection seed must not emit tyck errors");
-        ok &= require_(p.sir_cap.ok, "extern rejection seed must pass SIR capability");
+        ok &= require_(!p.prog.bag.has_error(), "host ABI acceptance seed must parse/type-check cleanly");
+        ok &= require_(p.ty.errors.empty(), "host ABI acceptance seed must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "host ABI acceptance seed must pass SIR capability");
         if (!ok) return false;
 
         const auto open = parus::goir::build_from_sir(p.sir_mod, p.prog.types);
-        ok &= require_(!open.ok, "gOIR official lane must reject extern functions instead of treating OIR as a fallback");
-        ok &= require_(!open.messages.empty(), "extern rejection must produce a diagnostic");
+        ok &= require_(open.ok, "gOIR official lane must accept the supported host ABI/global subset");
+        ok &= require_goir_messages_empty_(open.messages, "host ABI acceptance build emitted diagnostics");
+        if (!ok) return false;
+
+        const auto placed = parus::goir::place_module(open.mod);
+        ok &= require_(placed.ok, "placement must succeed for the supported host ABI/global subset");
+        ok &= require_goir_messages_empty_(placed.messages, "host ABI placement emitted diagnostics");
+        if (!ok) return false;
+
+        const auto text = parus::goir::to_string(placed.mod, &p.prog.types);
+        ok &= require_(text.find("global @g_vec") != std::string::npos,
+                       "placed gOIR dump must contain extern global metadata");
+        ok &= require_(text.find("call.extern @takes") != std::string::npos,
+                       "placed gOIR dump must contain explicit extern call lowering");
+        ok &= require_(text.find("realization @pass family=cpu abi=c linkage=exported") != std::string::npos,
+                       "placed gOIR dump must mark export C definitions as exported C realizations");
+        ok &= require_(text.find("realization @takes family=cpu abi=c linkage=external") != std::string::npos,
+                       "placed gOIR dump must keep extern C declarations as external C realizations");
+        ok &= require_(text.find("realization @__parus_goir_module_init") != std::string::npos,
+                       "placed gOIR dump must contain the synthetic static-global init realization");
+        return ok;
+    }
+
+    static bool test_goir_builder_rejects_unsupported_host_abi_types_() {
+        const std::string src = R"(
+            static G_BAD: text = "hello";
+
+            @pure def main() -> i32 { return 0i32; }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "unsupported-global rejection seed must parse/type-check cleanly");
+        ok &= require_(p.ty.errors.empty(), "unsupported-global rejection seed must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "unsupported-global rejection seed must pass SIR capability");
+        if (!ok) return false;
+
+        const auto open = parus::goir::build_from_sir(p.sir_mod, p.prog.types);
+        ok &= require_(!open.ok, "gOIR official lane must reject unsupported top-level global types");
+        ok &= require_(!open.messages.empty(), "unsupported-global rejection must produce a diagnostic");
         if (!open.messages.empty()) {
             bool found_expected = false;
             for (const auto& message : open.messages) {
-                if (message.msg.find("pure internal CPU entry") != std::string::npos ||
-                    message.msg.find("requires pure functions") != std::string::npos) {
+                if (message.msg.find("declared type of global") != std::string::npos ||
+                    message.msg.find("official lane does not support") != std::string::npos) {
                     found_expected = true;
                     break;
                 }
             }
             ok &= require_(found_expected,
-                           "extern rejection must explain that the official gOIR lane rejects non-pure/non-internal functions");
+                           "unsupported-global rejection must explain that the global type is outside the supported subset");
         }
         return ok;
     }
@@ -783,7 +831,8 @@ int main() {
         {"goir_optional_subview_enum_switch_slice", test_goir_optional_subview_enum_switch_slice_ok_},
         {"goir_builder_rejects_string_switch_patterns", test_goir_builder_rejects_string_switch_patterns_},
         {"goir_builder_rejects_payload_enum_switch_bindings", test_goir_builder_rejects_payload_enum_switch_bindings_},
-        {"goir_builder_rejects_extern_reference_lane_escape", test_goir_builder_rejects_extern_reference_lane_escape_},
+        {"goir_builder_accepts_host_abi_globals_and_calls", test_goir_builder_accepts_host_abi_globals_and_calls_},
+        {"goir_builder_rejects_unsupported_host_abi_types", test_goir_builder_rejects_unsupported_host_abi_types_},
     };
 
     int failed = 0;

@@ -42,6 +42,12 @@ namespace parus::goir {
         out.mod.header.stage_kind = StageKind::Placed;
 
         for (auto& real : out.mod.realizations) {
+            if (real.linkage == LinkageKind::External && real.abi_kind != AbiKind::C) {
+                out.messages.push_back(Message{
+                    "host ABI placement only supports external C realizations in this round."
+                });
+                return out;
+            }
             if (real.family == FamilyKind::None || real.family == FamilyKind::Core) {
                 real.family = FamilyKind::Cpu;
             }
@@ -64,6 +70,19 @@ namespace parus::goir {
                     .args = invoke->args,
                 };
                 inst.eff = Effect::Call;
+            } else if (const auto* xcall = std::get_if<OpCallExtern>(&inst.data)) {
+                if (xcall->callee == kInvalidId ||
+                    static_cast<size_t>(xcall->callee) >= out.mod.realizations.size()) {
+                    out.messages.push_back(Message{"placement found invalid external call realization"});
+                    return out;
+                }
+                const auto& callee = out.mod.realizations[xcall->callee];
+                if (callee.abi_kind != AbiKind::C || callee.linkage != LinkageKind::External) {
+                    out.messages.push_back(Message{
+                        "placement expected call.extern to target an external C realization."
+                    });
+                    return out;
+                }
             }
         }
 
@@ -101,6 +120,15 @@ namespace parus::goir {
                     "official gOIR placement rejects raw null constants; lower nullable values through optional.none instead."
                 });
                 return out;
+            }
+            if (const auto* xcall = std::get_if<OpCallExtern>(&inst.data)) {
+                const auto& callee = out.mod.realizations[xcall->callee];
+                if (callee.is_c_variadic) {
+                    out.messages.push_back(Message{
+                        "placement rejects C variadic host ABI calls in this round."
+                    });
+                    return out;
+                }
             }
         }
 

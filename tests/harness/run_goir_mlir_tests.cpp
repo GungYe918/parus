@@ -11,6 +11,7 @@
 #include <parus/goir/Verify.hpp>
 #include <parus/backend/mlir/GOIRMLIRLowering.hpp>
 
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -585,6 +586,33 @@ namespace {
         return ok;
     }
 
+    static bool emit_object_from_placed_goir_(const parus::goir::Module& placed,
+                                              const parus::ty::TypePool& types,
+                                              const std::string& stem,
+                                              parus::backend::mlir::GOIRObjectEmissionResult& out) {
+        const auto out_path = (std::filesystem::temp_directory_path() / ("parus_goir_mlir_" + stem + ".o")).string();
+        std::error_code ec;
+        std::filesystem::remove(out_path, ec);
+
+        out = parus::backend::mlir::emit_object_from_goir_via_mlir(
+            placed,
+            types,
+            parus::backend::mlir::GOIRLoweringOptions{.llvm_lane_major = PARUS_TEST_MLIR_LANE},
+            out_path,
+            "",
+            "",
+            2
+        );
+
+        bool ok = true;
+        ok &= require_(out.ok, "gOIR placed module must emit an object through the MLIR lane");
+        if (!out.ok) {
+            ok &= require_compile_messages_empty_(out.messages, "gOIR object emission emitted diagnostics");
+        }
+        ok &= require_(std::filesystem::exists(out_path), "MLIR object emission reported success but the object file is missing");
+        return ok;
+    }
+
     static bool test_mlir_smoke_ok_() {
         std::string error{};
         const bool ok = parus::backend::mlir::run_mlir_smoke(&error);
@@ -890,6 +918,169 @@ namespace {
         return ok;
     }
 
+    static bool test_source_host_abi_global_and_export_to_mlir_and_llvm_ir_ok_() {
+        const std::string src = R"(
+            struct layout(c) align(16) Vec2 {
+                x: i32;
+                y: i32;
+            };
+
+            extern "C" static mut g_vec: Vec2;
+
+            export "C" def probe() -> i32 {
+                g_vec.x = 7i32;
+                return g_vec.x;
+            }
+        )";
+
+        parus::goir::Module placed{};
+        parus::ty::TypePool types{};
+        if (!build_placed_goir_from_source_(src, placed, types)) return false;
+
+        parus::backend::mlir::GOIRLoweringResult mlir{};
+        parus::backend::mlir::GOIRLLVMIRResult llvm_ir{};
+        if (!lower_placed_to_mlir_and_llvm_(placed, types, mlir, llvm_ir)) return false;
+
+        bool ok = true;
+        ok &= require_(mlir.mlir_text.find("llvm.mlir.global external @g_vec() : !llvm.array<16 x i8>") != std::string::npos,
+                       "MLIR text must expose layout(c) extern globals as byte aggregates");
+        ok &= require_(mlir.mlir_text.find("llvm.mlir.addressof @g_vec") != std::string::npos,
+                       "MLIR text must materialize extern global addresses");
+        ok &= require_(mlir.mlir_text.find("llvm.getelementptr") != std::string::npos,
+                       "MLIR text must lower global field chains through llvm.getelementptr");
+        ok &= require_(mlir.mlir_text.find("func.func @probe") != std::string::npos,
+                       "MLIR text must keep export C definitions as explicit symbols");
+        if (!ok) return false;
+
+        ok &= require_(llvm_ir.llvm_ir.find("@g_vec = external global [16 x i8], align 16") != std::string::npos,
+                       "LLVM IR must emit the extern layout(c) global with byte storage and ABI alignment");
+        ok &= require_(llvm_ir.llvm_ir.find("define i32 @probe(") != std::string::npos,
+                       "LLVM IR must keep the unmangled export symbol");
+        ok &= require_(llvm_ir.llvm_ir.find("store i32") != std::string::npos,
+                       "LLVM IR must emit typed stores for global field writes");
+        ok &= require_(llvm_ir.llvm_ir.find("load i32") != std::string::npos,
+                       "LLVM IR must emit typed loads for global field reads");
+        return ok;
+    }
+
+    static bool test_source_c_abi_by_value_record_call_to_mlir_and_llvm_ir_ok_() {
+        const std::string src = R"(
+            struct layout(c) Vec2 {
+                x: i32;
+                y: i32;
+            };
+
+            extern "C" def takes(v: Vec2) -> i32;
+
+            export "C" def pass(v: Vec2) -> i32 {
+                return takes(v);
+            }
+        )";
+
+        parus::goir::Module placed{};
+        parus::ty::TypePool types{};
+        if (!build_placed_goir_from_source_(src, placed, types)) return false;
+
+        parus::backend::mlir::GOIRLoweringResult mlir{};
+        parus::backend::mlir::GOIRLLVMIRResult llvm_ir{};
+        if (!lower_placed_to_mlir_and_llvm_(placed, types, mlir, llvm_ir)) return false;
+
+        bool ok = true;
+        ok &= require_(mlir.mlir_text.find("llvm.func @takes(!llvm.array<8 x i8>) -> i32") != std::string::npos,
+                       "MLIR text must declare extern C by-value records as byte aggregates");
+        ok &= require_(mlir.mlir_text.find("func.func @pass(") != std::string::npos &&
+                       mlir.mlir_text.find("!llvm.array<8 x i8>") != std::string::npos,
+                       "MLIR text must keep export C by-value parameters in aggregate form");
+        ok &= require_(mlir.mlir_text.find("llvm.call @takes(") != std::string::npos &&
+                       mlir.mlir_text.find("(!llvm.array<8 x i8>) -> i32") != std::string::npos,
+                       "MLIR text must lower extern C calls through llvm.call with aggregate args");
+        if (!ok) return false;
+
+        ok &= require_(llvm_ir.llvm_ir.find("declare i32 @takes([8 x i8])") != std::string::npos,
+                       "LLVM IR must expose extern C by-value records as aggregate parameters");
+        ok &= require_(llvm_ir.llvm_ir.find("define i32 @pass([8 x i8]") != std::string::npos,
+                       "LLVM IR must preserve aggregate export signatures");
+        ok &= require_(llvm_ir.llvm_ir.find("call i32 @takes([8 x i8]") != std::string::npos,
+                       "LLVM IR must pass C ABI records by value, not by pointer");
+        return ok;
+    }
+
+    static bool test_source_c_abi_callconv_metadata_to_llvm_ir_ok_() {
+        const std::string src = R"(
+            extern "C" def c_fn(x: i32) -> i32;
+
+            def main() -> i32 {
+                return c_fn(7i32);
+            }
+        )";
+
+        parus::goir::Module placed{};
+        parus::ty::TypePool types{};
+        if (!build_placed_goir_from_source_(src, placed, types)) return false;
+
+        for (auto& real : placed.realizations) {
+            const auto name = std::string(
+                real.link_name != parus::goir::kInvalidId
+                    ? placed.string(real.link_name)
+                    : placed.string(real.name)
+            );
+            if (name == "c_fn") {
+                real.c_callconv = parus::sir::CCallConv::kSysV;
+            }
+        }
+
+        parus::backend::mlir::GOIRLoweringResult mlir{};
+        parus::backend::mlir::GOIRLLVMIRResult llvm_ir{};
+        if (!lower_placed_to_mlir_and_llvm_(placed, types, mlir, llvm_ir)) return false;
+
+        bool ok = true;
+        ok &= require_(llvm_ir.llvm_ir.find("declare x86_64_sysvcc i32 @c_fn(i32)") != std::string::npos,
+                       "LLVM IR must preserve patched host callconv metadata on extern declarations");
+        ok &= require_(llvm_ir.llvm_ir.find("call x86_64_sysvcc i32 @c_fn(i32") != std::string::npos,
+                       "LLVM IR must preserve patched host callconv metadata on call sites");
+        return ok;
+    }
+
+    static bool test_source_static_globals_object_ready_via_mlir_ok_() {
+        const std::string src = R"(
+            static const G_CONST: i32 = 7i32;
+            static G_MUT: i32 = 9i32;
+
+            def main() -> i32 {
+                return G_CONST + G_MUT;
+            }
+        )";
+
+        parus::goir::Module placed{};
+        parus::ty::TypePool types{};
+        if (!build_placed_goir_from_source_(src, placed, types)) return false;
+
+        parus::backend::mlir::GOIRLoweringResult mlir{};
+        parus::backend::mlir::GOIRLLVMIRResult llvm_ir{};
+        if (!lower_placed_to_mlir_and_llvm_(placed, types, mlir, llvm_ir)) return false;
+
+        bool ok = true;
+        ok &= require_(mlir.mlir_text.find("llvm.mlir.global internal constant @G_CONST() : i32") != std::string::npos,
+                       "MLIR text must emit static const globals as LLVM globals");
+        ok &= require_(mlir.mlir_text.find("llvm.mlir.global internal @G_MUT() : i32") != std::string::npos,
+                       "MLIR text must emit static mutable globals as zero-init LLVM globals");
+        ok &= require_(mlir.mlir_text.find("func.func @__parus_goir_module_init()") != std::string::npos,
+                       "MLIR text must emit the synthetic static-global init function");
+        if (!ok) return false;
+
+        ok &= require_(llvm_ir.llvm_ir.find("constant i32 7") != std::string::npos,
+                       "LLVM IR must emit static const globals as constants");
+        ok &= require_(llvm_ir.llvm_ir.find("define void @__parus_goir_module_init()") != std::string::npos,
+                       "LLVM IR must emit the synthetic module-init function symbol");
+        ok &= require_(llvm_ir.llvm_ir.find("store i32 9, ptr @G_MUT") != std::string::npos,
+                       "LLVM IR must initialize static mutable globals through explicit stores");
+        if (!ok) return false;
+
+        parus::backend::mlir::GOIRObjectEmissionResult obj{};
+        ok &= emit_object_from_placed_goir_(placed, types, "host_abi_object_ready", obj);
+        return ok;
+    }
+
     static bool test_ownership_sensitive_failure_stays_out_of_mlir_lane_() {
         parus::ty::TypePool types{};
         const auto open = make_open_ownership_marker_module_(types);
@@ -923,6 +1114,10 @@ int main() {
         {"manual_block_arg_cfg_to_mlir_and_llvm_ir", test_manual_block_arg_cfg_to_mlir_and_llvm_ir_ok_},
         {"manual_array_make_get_to_mlir_and_llvm_ir", test_manual_array_make_get_to_mlir_and_llvm_ir_ok_},
         {"manual_subview_len_to_mlir_and_llvm_ir", test_manual_subview_len_to_mlir_and_llvm_ir_ok_},
+        {"source_host_abi_global_and_export_to_mlir_and_llvm_ir", test_source_host_abi_global_and_export_to_mlir_and_llvm_ir_ok_},
+        {"source_c_abi_by_value_record_call_to_mlir_and_llvm_ir", test_source_c_abi_by_value_record_call_to_mlir_and_llvm_ir_ok_},
+        {"source_c_abi_callconv_metadata_to_llvm_ir", test_source_c_abi_callconv_metadata_to_llvm_ir_ok_},
+        {"source_static_globals_object_ready_via_mlir", test_source_static_globals_object_ready_via_mlir_ok_},
         {"ownership_sensitive_failure_stays_out_of_mlir_lane", test_ownership_sensitive_failure_stays_out_of_mlir_lane_},
     };
 

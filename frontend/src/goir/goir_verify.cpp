@@ -30,6 +30,10 @@ namespace parus::goir {
             return id != kInvalidId && static_cast<size_t>(id) < m.realizations.size();
         }
 
+        bool is_valid_global_(const Module& m, GlobalId id) {
+            return id != kInvalidId && static_cast<size_t>(id) < m.globals.size();
+        }
+
         const RecordLayout* record_layout_(const Module& m, TypeId ty) {
             return m.find_record_layout(ty);
         }
@@ -97,6 +101,24 @@ namespace parus::goir {
             }
         }
 
+        for (size_t i = 0; i < module.globals.size(); ++i) {
+            const auto& global = module.globals[i];
+            if (global.name == kInvalidId || static_cast<size_t>(global.name) >= module.strings.size()) {
+                push_error_(out, "global has invalid name string id");
+            }
+            if (global.link_name != kInvalidId &&
+                static_cast<size_t>(global.link_name) >= module.strings.size()) {
+                push_error_(out, "global has invalid link-name string id");
+            }
+            if (global.type == kInvalidType) {
+                push_error_(out, "global has invalid declared type");
+            }
+            if (global.abi_kind == AbiKind::C &&
+                global.tls_kind != parus::sir::CThreadLocalKind::kNone) {
+                push_error_(out, "gOIR M2 host ABI globals do not support TLS yet");
+            }
+        }
+
         for (size_t i = 0; i < module.semantic_sigs.size(); ++i) {
             const auto& sig = module.semantic_sigs[i];
             if (sig.name == kInvalidId || static_cast<size_t>(sig.name) >= module.strings.size()) {
@@ -130,8 +152,21 @@ namespace parus::goir {
             if (!is_valid_computation_(module, real.computation)) {
                 push_error_(out, "realization has invalid computation");
             }
-            if (!is_valid_block_(module, real.entry)) {
-                push_error_(out, "realization has invalid entry block");
+            if (real.link_name != kInvalidId &&
+                static_cast<size_t>(real.link_name) >= module.strings.size()) {
+                push_error_(out, "realization has invalid link-name string id");
+            }
+            if (real.linkage == LinkageKind::External) {
+                if (!real.blocks.empty()) {
+                    push_error_(out, "external realization must not own blocks");
+                }
+                if (real.entry != kInvalidId) {
+                    push_error_(out, "external realization must not have an entry block");
+                }
+            } else {
+                if (!is_valid_block_(module, real.entry)) {
+                    push_error_(out, "realization has invalid entry block");
+                }
             }
             for (const auto bb : real.blocks) {
                 if (!is_valid_block_(module, bb)) {
@@ -228,6 +263,19 @@ namespace parus::goir {
                         const auto& result = module.values[inst.result];
                         if (!result.is_place || result.place_kind != PlaceKind::LocalSlot) {
                             push_error_(out, "OpLocalSlot result must be a local-slot place");
+                        }
+                    } else if constexpr (std::is_same_v<T, OpGlobalSlot>) {
+                        if (inst.result == kInvalidId) {
+                            push_error_(out, "OpGlobalSlot must produce a result");
+                            return;
+                        }
+                        if (!is_valid_global_(module, data.global)) {
+                            push_error_(out, "OpGlobalSlot references an invalid global");
+                            return;
+                        }
+                        const auto& result = module.values[inst.result];
+                        if (!result.is_place || result.place_kind != PlaceKind::GlobalSlot) {
+                            push_error_(out, "OpGlobalSlot result must be a global-slot place");
                         }
                     } else if constexpr (std::is_same_v<T, OpFieldPlace>) {
                         verify_value_ref_(module, data.base, "OpFieldPlace.base", out);
@@ -330,6 +378,18 @@ namespace parus::goir {
                         }
                         if (module.header.stage_kind != StageKind::Placed) {
                             push_error_(out, "OpCallDirect is only legal in gOIR-placed");
+                        }
+                    } else if constexpr (std::is_same_v<T, OpCallExtern>) {
+                        if (!is_valid_realization_(module, data.callee)) {
+                            push_error_(out, "OpCallExtern has invalid callee realization");
+                            return;
+                        }
+                        const auto& callee = module.realizations[data.callee];
+                        if (callee.abi_kind != AbiKind::C || callee.linkage != LinkageKind::External) {
+                            push_error_(out, "OpCallExtern must reference an external C-ABI realization");
+                        }
+                        for (const auto arg : data.args) {
+                            verify_value_ref_(module, arg, "OpCallExtern.arg", out);
                         }
                     }
                 }, inst.data);

@@ -53,6 +53,10 @@ namespace parusc::cli {
                 out.internal.emit_goir_llvm_ir = true;
                 return true;
             }
+            if (token == "-emit-goir-object") {
+                out.internal.emit_goir_object = true;
+                return true;
+            }
             return false;
         }
 
@@ -163,7 +167,8 @@ namespace parusc::cli {
                 return false;
             }
             if (out.emit_object || out.internal.emit_object || out.internal.emit_llvm_ir
-                || out.internal.emit_goir_mlir || out.internal.emit_goir_llvm_ir) {
+                || out.internal.emit_goir_mlir || out.internal.emit_goir_llvm_ir
+                || out.internal.emit_goir_object) {
                 out.ok = false;
                 out.error = "-fsyntax-only cannot be combined with -Xparus emit options";
                 return false;

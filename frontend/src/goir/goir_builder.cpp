@@ -197,6 +197,9 @@ namespace parus::goir {
                 scan_global_switch_lane_rejections_();
                 if (!messages_.empty()) return finish_();
 
+                discover_supported_globals_();
+                if (!messages_.empty()) return finish_();
+
                 discover_supported_funcs_();
                 if (!messages_.empty()) return finish_();
 
@@ -204,6 +207,10 @@ namespace parus::goir {
                     const auto& fn = sir_.funcs[i];
                     if (!supported_func_[static_cast<uint32_t>(i)]) continue;
                     lower_func_(static_cast<uint32_t>(i), fn);
+                }
+
+                if (messages_.empty()) {
+                    lower_static_global_init_();
                 }
 
                 run_open_passes(mod_);
@@ -235,6 +242,8 @@ namespace parus::goir {
             std::unordered_map<parus::sir::SymbolId, ComputationId> computation_by_sym_{};
             std::unordered_map<uint32_t, ComputationId> computation_by_func_index_{};
             std::unordered_map<uint32_t, RealizationId> realization_by_func_index_{};
+            std::unordered_map<parus::sir::SymbolId, RealizationId> realization_by_sym_{};
+            std::unordered_map<parus::sir::SymbolId, GlobalId> global_by_sym_{};
             std::unordered_map<uint32_t, bool> supported_func_{};
 
             BuildResult finish_() {
@@ -268,6 +277,11 @@ namespace parus::goir {
                 return layout != nullptr &&
                        layout->fields.size() == 1 &&
                        mod_.string(layout->fields[0].name) == "__tag";
+            }
+
+            bool is_layout_c_record_type_(TypeId ty) const {
+                const auto* layout = find_record_layout_(ty);
+                return layout != nullptr && layout->layout == parus::sir::FieldLayout::kC;
             }
 
             bool is_supported_value_type_(TypeId ty) const {
@@ -319,6 +333,29 @@ namespace parus::goir {
                 return is_unit_type_(types_, ty) || is_supported_value_type_(ty);
             }
 
+            bool is_supported_host_abi_record_type_(TypeId ty) const {
+                const auto* layout = find_record_layout_(ty);
+                if (layout == nullptr || layout->layout != parus::sir::FieldLayout::kC) return false;
+                for (const auto& field : layout->fields) {
+                    if (!is_supported_host_abi_type_(field.type)) return false;
+                }
+                return true;
+            }
+
+            bool is_supported_host_abi_type_(TypeId ty) const {
+                if (ty == kInvalidType) return false;
+                if (is_supported_scalar_type_(types_, ty)) return true;
+                if (is_tag_only_enum_type_(ty)) return true;
+                if (is_supported_host_abi_record_type_(ty)) return true;
+                return false;
+            }
+
+            bool is_supported_global_type_(TypeId ty) const {
+                return is_supported_scalar_type_(types_, ty) ||
+                       is_tag_only_enum_type_(ty) ||
+                       is_supported_host_abi_record_type_(ty);
+            }
+
             void scan_global_switch_lane_rejections_() {
                 for (const auto& sc : sir_.switch_cases) {
                     if (!sc.is_default &&
@@ -333,10 +370,70 @@ namespace parus::goir {
                 }
             }
 
+            void discover_supported_globals_() {
+                for (uint32_t i = 0; i < sir_.globals.size(); ++i) {
+                    const auto& global = sir_.globals[i];
+                    if (global.sym == parus::sir::k_invalid_symbol) {
+                        push_error_("gOIR official lane saw a global without a resolved symbol.");
+                        continue;
+                    }
+                    if (global.is_export) {
+                        push_error_("gOIR host ABI lane does not support exported globals in this round ('" +
+                                    global.name + "').");
+                        continue;
+                    }
+                    if (global.abi == parus::sir::FuncAbi::kC && global.c_tls_kind != parus::sir::CThreadLocalKind::kNone) {
+                        push_error_("gOIR host ABI lane does not support TLS globals in this round ('" +
+                                    global.name + "').");
+                        continue;
+                    }
+                    if (!(global.is_extern || global.is_static)) {
+                        push_error_("gOIR official lane currently only supports extern or static top-level globals ('" +
+                                    global.name + "').");
+                        continue;
+                    }
+                    if (!is_supported_global_type_(global.declared_type)) {
+                        push_error_("gOIR official lane does not support the declared type of global '" +
+                                    global.name + "'.");
+                        continue;
+                    }
+                    if (global.is_static && global.is_const && !global.is_extern &&
+                        global.const_init.kind == parus::sir::ConstInitKind::kNone) {
+                        push_error_("gOIR host ABI lane currently requires a folded scalar const-init for static const global '" +
+                                    global.name + "'.");
+                        continue;
+                    }
+
+                    GGlobal gg{};
+                    gg.name = mod_.add_string(global.name);
+                    gg.link_name = gg.name;
+                    gg.type = global.declared_type;
+                    gg.is_mutable = global.is_set || global.is_mut;
+                    gg.is_const = global.is_const;
+                    gg.is_static = global.is_static;
+                    gg.is_extern = global.is_extern;
+                    gg.is_export = global.is_export;
+                    gg.abi_kind = (global.abi == parus::sir::FuncAbi::kC) ? AbiKind::C : AbiKind::Parus;
+                    gg.linkage = global.is_extern ? LinkageKind::External : LinkageKind::Internal;
+                    gg.tls_kind = global.c_tls_kind;
+                    gg.folded_const_init = global.const_init;
+                    gg.runtime_init_needed =
+                        global.is_static &&
+                        !global.is_const &&
+                        global.init != parus::sir::k_invalid_value;
+                    gg.source_global = i;
+
+                    const auto gid = mod_.add_global(gg);
+                    global_by_sym_[global.sym] = gid;
+                }
+            }
+
             void copy_record_layouts_() {
                 for (const auto& field : sir_.fields) {
                     RecordLayout layout{};
                     layout.self_type = field.self_type;
+                    layout.layout = field.layout;
+                    layout.align = field.align;
                     const uint64_t begin = field.member_begin;
                     const uint64_t end = begin + field.member_count;
                     if (begin > sir_.field_members.size() || end > sir_.field_members.size()) continue;
@@ -351,21 +448,21 @@ namespace parus::goir {
                 }
             }
 
-            bool is_supported_signature_(const parus::sir::Func& fn) {
-                if (fn.is_extern || fn.is_throwing || fn.abi != parus::sir::FuncAbi::kParus ||
-                    fn.is_actor_member || fn.is_actor_init || fn.is_acts_member) {
-                    push_error_("gOIR M1 does not support function '" + std::string(fn.name) +
-                                "' in the official lane because it is not a pure internal CPU entry.");
+            bool is_supported_internal_signature_(const parus::sir::Func& fn) {
+                if (fn.is_extern || fn.is_throwing || fn.abi != parus::sir::FuncAbi::kParus) {
+                    push_error_("gOIR official lane does not support function '" + std::string(fn.name) +
+                                "' as an internal computation in this round.");
                     return false;
                 }
                 if (!is_supported_signature_type_(fn.ret)) {
-                    push_error_("gOIR M1 does not support return type of function '" + std::string(fn.name) + "'.");
+                    push_error_("gOIR official lane does not support the return type of internal function '" +
+                                std::string(fn.name) + "'.");
                     return false;
                 }
                 for (uint32_t i = 0; i < fn.param_count; ++i) {
                     const auto& param = sir_.params[fn.param_begin + i];
                     if (!is_supported_signature_type_(param.type)) {
-                        push_error_("gOIR M1 does not support parameter type of function '" +
+                        push_error_("gOIR official lane does not support a parameter type of internal function '" +
                                     std::string(fn.name) + "'.");
                         return false;
                     }
@@ -373,18 +470,65 @@ namespace parus::goir {
                 return true;
             }
 
+            bool is_supported_host_signature_(const parus::sir::Func& fn) {
+                if (fn.is_throwing) {
+                    push_error_("gOIR host ABI lane does not support throwing function '" +
+                                std::string(fn.name) + "'.");
+                    return false;
+                }
+                if (fn.abi != parus::sir::FuncAbi::kC) {
+                    push_error_("gOIR host ABI lane only accepts \"C\" ABI function '" +
+                                std::string(fn.name) + "'.");
+                    return false;
+                }
+                if (fn.is_c_variadic) {
+                    push_error_("gOIR host ABI lane does not support C variadic function '" +
+                                std::string(fn.name) + "' in this round.");
+                    return false;
+                }
+                if (!(fn.is_extern || fn.is_export)) {
+                    push_error_("gOIR host ABI lane currently only supports extern/export free functions; '" +
+                                std::string(fn.name) + "' is outside the supported subset.");
+                    return false;
+                }
+                if (!is_unit_type_(types_, fn.ret) && !is_supported_host_abi_type_(fn.ret)) {
+                    push_error_("gOIR host ABI lane does not support the return type of function '" +
+                                std::string(fn.name) + "'.");
+                    return false;
+                }
+                for (uint32_t i = 0; i < fn.param_count; ++i) {
+                    const auto& param = sir_.params[fn.param_begin + i];
+                    if (!is_supported_host_abi_type_(param.type)) {
+                        push_error_("gOIR host ABI lane does not support a parameter type of function '" +
+                                    std::string(fn.name) + "'.");
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            bool is_supported_signature_(const parus::sir::Func& fn) {
+                if (fn.is_actor_member || fn.is_actor_init || fn.is_acts_member) {
+                    push_error_("gOIR official lane does not support actor/acts methods for function '" +
+                                std::string(fn.name) + "' in this round.");
+                    return false;
+                }
+                if (fn.abi == parus::sir::FuncAbi::kC || fn.is_extern || fn.is_export) {
+                    return is_supported_host_signature_(fn);
+                }
+                return is_supported_internal_signature_(fn);
+            }
+
             void discover_supported_funcs_() {
                 for (uint32_t i = 0; i < sir_.funcs.size(); ++i) {
                     const auto& fn = sir_.funcs[i];
                     const bool is_pure = fn.is_pure || has_attr_(sir_, fn, "pure");
-                    if (!is_pure) {
-                        push_error_("gOIR M1 requires pure functions; unsupported function '" +
-                                    std::string(fn.name) + "'.");
-                        continue;
-                    }
                     if (!is_supported_signature_(fn)) continue;
 
                     const auto name = mod_.add_string(std::string(fn.name));
+                    const auto link_name = mod_.add_string(
+                        fn.external_link_name.empty() ? std::string(fn.name) : fn.external_link_name
+                    );
 
                     SemanticSig sig{};
                     sig.name = name;
@@ -408,7 +552,13 @@ namespace parus::goir {
                     GRealization real{};
                     real.name = name;
                     real.computation = comp_id;
-                    real.family = FamilyKind::Core;
+                    real.family = fn.is_extern ? FamilyKind::Cpu : FamilyKind::Core;
+                    real.abi_kind = (fn.abi == parus::sir::FuncAbi::kC) ? AbiKind::C : AbiKind::Parus;
+                    real.linkage = fn.is_extern ? LinkageKind::External :
+                                   (fn.is_export ? LinkageKind::Exported : LinkageKind::Internal);
+                    real.link_name = link_name;
+                    real.c_callconv = fn.c_callconv;
+                    real.is_c_variadic = fn.is_c_variadic;
                     real.is_entry = !fn.is_extern;
                     real.is_pure = is_pure;
                     real.is_extern = fn.is_extern;
@@ -416,9 +566,12 @@ namespace parus::goir {
                     real.source_func = i;
                     const auto real_id = mod_.add_realization(real);
                     realization_by_func_index_[i] = real_id;
+                    realization_by_sym_[fn.sym] = real_id;
 
                     mod_.computations[comp_id].realizations.push_back(real_id);
-                    computation_by_sym_[fn.sym] = comp_id;
+                    if (real.abi_kind == AbiKind::Parus) {
+                        computation_by_sym_[fn.sym] = comp_id;
+                    }
                     supported_func_[i] = true;
                 }
             }
@@ -756,14 +909,50 @@ namespace parus::goir {
                     case ValueKind::kLocal: {
                         const auto binding = lookup_binding_(state, value.sym);
                         if (!binding.has_value()) {
-                            push_error_("gOIR builder could not resolve local symbol in SIR place.");
-                            return kInvalidId;
+                            const auto git = global_by_sym_.find(value.sym);
+                            if (git == global_by_sym_.end()) {
+                                push_error_("gOIR builder could not resolve local symbol in SIR place.");
+                                return kInvalidId;
+                            }
+                            const auto& global = mod_.globals[git->second];
+                            return emit_inst_(
+                                state,
+                                global.type,
+                                Effect::Pure,
+                                OpGlobalSlot{.global = git->second},
+                                {},
+                                classify_layout_(global.type),
+                                true,
+                                global.type,
+                                PlaceKind::GlobalSlot,
+                                global.is_mutable
+                            );
                         }
                         if (!binding->is_place) {
                             push_error_("gOIR official lane cannot take a place from an immutable value binding.");
                             return kInvalidId;
                         }
                         return binding->value;
+                    }
+                    case ValueKind::kGlobal: {
+                        const auto it = global_by_sym_.find(value.sym);
+                        if (it == global_by_sym_.end()) {
+                            push_error_("gOIR builder could not resolve global symbol in SIR place.");
+                            return kInvalidId;
+                        }
+                        const auto& global = mod_.globals[it->second];
+                        return emit_inst_(
+                            state,
+                            global.type,
+                            Effect::Pure,
+                            OpGlobalSlot{.global = it->second},
+                            {},
+                            classify_layout_(global.type),
+                            true,
+                            global.type,
+                            PlaceKind::GlobalSlot,
+                            global.is_mutable
+                        );
                     }
                     case ValueKind::kField: {
                         const auto base = lower_place_(state, value.a);
@@ -890,8 +1079,36 @@ namespace parus::goir {
                     case ValueKind::kLocal: {
                         const auto binding = lookup_binding_(state, value.sym);
                         if (!binding.has_value()) {
-                            push_error_("gOIR builder could not resolve local symbol in SIR.");
-                            return kInvalidId;
+                            const auto git = global_by_sym_.find(value.sym);
+                            if (git == global_by_sym_.end()) {
+                                push_error_("gOIR builder could not resolve local symbol in SIR.");
+                                return kInvalidId;
+                            }
+                            const auto place = emit_inst_(
+                                state,
+                                mod_.globals[git->second].type,
+                                Effect::Pure,
+                                OpGlobalSlot{.global = git->second},
+                                {},
+                                classify_layout_(mod_.globals[git->second].type),
+                                true,
+                                mod_.globals[git->second].type,
+                                PlaceKind::GlobalSlot,
+                                mod_.globals[git->second].is_mutable
+                            );
+                            if (place == kInvalidId) return kInvalidId;
+                            const auto layout = classify_layout_(mod_.globals[git->second].type);
+                            if (binding_place_reads_as_value_(layout)) {
+                                return emit_inst_(
+                                    state,
+                                    mod_.globals[git->second].type,
+                                    Effect::MayRead,
+                                    OpLoad{.place = place},
+                                    {},
+                                    layout
+                                );
+                            }
+                            return place;
                         }
                         if (!binding->is_place) return binding->value;
                         if (binding_place_reads_as_value_(binding->layout)) {
@@ -905,6 +1122,22 @@ namespace parus::goir {
                             );
                         }
                         return binding->value;
+                    }
+                    case ValueKind::kGlobal: {
+                        const auto place = lower_place_(state, sid);
+                        if (place == kInvalidId) return kInvalidId;
+                        const auto layout = classify_layout_(mod_.values[place].place_elem_type);
+                        if (binding_place_reads_as_value_(layout)) {
+                            return emit_inst_(
+                                state,
+                                mod_.values[place].place_elem_type,
+                                Effect::MayRead,
+                                OpLoad{.place = place},
+                                {},
+                                layout
+                            );
+                        }
+                        return place;
                     }
                     case ValueKind::kUnary: {
                         const auto src = lower_value_(state, value.a);
@@ -945,19 +1178,19 @@ namespace parus::goir {
                             push_error_("gOIR M1 does not support core runtime helper calls yet.");
                             return kInvalidId;
                         }
-                        if (value.call_is_throwing || value.call_is_c_abi) {
-                            push_error_("gOIR M1 does not support throwing or C ABI calls.");
+                        if (value.call_is_throwing) {
+                            push_error_("gOIR official lane does not support throwing calls.");
                             return kInvalidId;
                         }
-                        const auto cit = computation_by_sym_.find(value.callee_sym);
-                        if (cit == computation_by_sym_.end()) {
-                            push_error_("gOIR M1 only supports direct pure/internal calls.");
+                        const auto rit = realization_by_sym_.find(value.callee_sym);
+                        if (rit == realization_by_sym_.end()) {
+                            push_error_("gOIR official lane only supports direct calls to known lowered realizations.");
                             return kInvalidId;
                         }
-                        OpSemanticInvoke invoke{};
-                        invoke.computation = cit->second;
-                        const auto sig_id = mod_.computations[cit->second].sig;
+                        const auto& callee = mod_.realizations[rit->second];
+                        const auto sig_id = mod_.computations[callee.computation].sig;
                         const auto& sig = mod_.semantic_sigs[sig_id];
+                        std::vector<ValueId> lowered_args{};
                         for (uint32_t i = 0; i < value.arg_count; ++i) {
                             const auto aid = value.arg_begin + i;
                             if (static_cast<size_t>(aid) >= sir_.args.size()) {
@@ -971,9 +1204,37 @@ namespace parus::goir {
                             }
                             const auto param_ty =
                                 (i < sig.param_types.size()) ? sig.param_types[i] : sir_.values[arg.value].type;
-                            invoke.args.push_back(lower_value_as_(state, arg.value, param_ty));
+                            lowered_args.push_back(lower_value_as_(state, arg.value, param_ty));
                         }
-                        return emit_inst_(state, value.type, Effect::Call, std::move(invoke));
+                        if (callee.abi_kind == AbiKind::C || value.call_is_c_abi) {
+                            return emit_inst_(
+                                state,
+                                value.type,
+                                Effect::Call,
+                                OpCallExtern{
+                                    .callee = rit->second,
+                                    .args = std::move(lowered_args),
+                                },
+                                {},
+                                classify_layout_(value.type)
+                            );
+                        }
+                        const auto cit = computation_by_sym_.find(value.callee_sym);
+                        if (cit == computation_by_sym_.end()) {
+                            push_error_("gOIR official lane only supports direct pure/internal calls.");
+                            return kInvalidId;
+                        }
+                        return emit_inst_(
+                            state,
+                            value.type,
+                            Effect::Call,
+                            OpSemanticInvoke{
+                                .computation = cit->second,
+                                .args = std::move(lowered_args),
+                            },
+                            {},
+                            classify_layout_(value.type)
+                        );
                     }
                     case ValueKind::kBorrow: {
                         OwnershipInfo ownership{};
@@ -1338,6 +1599,118 @@ namespace parus::goir {
                 state.current_block = after_bb;
             }
 
+            bool is_supported_global_constexpr_(parus::sir::ValueId sid, TypeId expected_ty) const {
+                if (sid == parus::sir::k_invalid_value || static_cast<size_t>(sid) >= sir_.values.size()) return false;
+                const auto& value = sir_.values[sid];
+                switch (value.kind) {
+                    case ValueKind::kIntLit:
+                    case ValueKind::kFloatLit:
+                    case ValueKind::kBoolLit:
+                    case ValueKind::kCharLit:
+                        return true;
+                    case ValueKind::kEnumCtor:
+                        return value.arg_count == 0 && is_tag_only_enum_type_(expected_ty);
+                    case ValueKind::kFieldInit: {
+                        if (!is_supported_host_abi_record_type_(expected_ty)) return false;
+                        const auto* layout = find_record_layout_(expected_ty);
+                        if (layout == nullptr) return false;
+                        const uint64_t arg_end =
+                            static_cast<uint64_t>(value.arg_begin) + static_cast<uint64_t>(value.arg_count);
+                        if (arg_end > sir_.args.size()) return false;
+                        for (uint32_t i = 0; i < value.arg_count; ++i) {
+                            const auto& arg = sir_.args[value.arg_begin + i];
+                            if (arg.is_hole || arg.value == parus::sir::k_invalid_value || !arg.has_label) continue;
+                            const auto field_ty = lookup_record_field_type_(expected_ty, arg.label);
+                            if (field_ty == kInvalidType) return false;
+                            if (!is_supported_global_constexpr_(arg.value, field_ty)) return false;
+                        }
+                        return true;
+                    }
+                    default:
+                        return false;
+                }
+            }
+
+            void lower_static_global_init_() {
+                std::vector<std::pair<GlobalId, const parus::sir::GlobalVarDecl*>> pending{};
+                for (const auto& [sym, gid] : global_by_sym_) {
+                    if (static_cast<size_t>(gid) >= mod_.globals.size()) continue;
+                    const auto& global = mod_.globals[gid];
+                    if (!global.runtime_init_needed) continue;
+                    if (global.source_global == kInvalidId || static_cast<size_t>(global.source_global) >= sir_.globals.size()) {
+                        push_error_("gOIR host ABI lane saw a static mutable global without a valid source declaration.");
+                        return;
+                    }
+                    pending.push_back({gid, &sir_.globals[global.source_global]});
+                }
+                if (pending.empty()) return;
+
+                const auto name = mod_.add_string("__parus_goir_module_init");
+                SemanticSig sig{};
+                sig.name = name;
+                sig.result_type = types_.builtin(parus::ty::Builtin::kUnit);
+                sig.is_pure = false;
+                const auto sig_id = mod_.add_semantic_sig(sig);
+
+                const auto policy_id = mod_.add_placement_policy(GPlacementPolicy{});
+
+                GComputation comp{};
+                comp.name = name;
+                comp.sig = sig_id;
+                comp.placement_policy = policy_id;
+                const auto comp_id = mod_.add_computation(comp);
+
+                GRealization real{};
+                real.name = name;
+                real.computation = comp_id;
+                real.family = FamilyKind::Core;
+                real.abi_kind = AbiKind::Parus;
+                real.linkage = LinkageKind::Internal;
+                real.link_name = name;
+                real.is_entry = false;
+                real.is_pure = false;
+                real.fn_type = kInvalidType;
+                real.source_func = kInvalidId;
+                const auto real_id = mod_.add_realization(real);
+                mod_.computations[comp_id].realizations.push_back(real_id);
+
+                FuncState state{};
+                state.realization = real_id;
+                state.current_block = mod_.add_block(Block{});
+                state.return_type = sig.result_type;
+
+                auto& init_real = mod_.realizations[real_id];
+                init_real.entry = state.current_block;
+                init_real.blocks.push_back(state.current_block);
+
+                for (const auto& entry : pending) {
+                    const auto gid = entry.first;
+                    const auto& src = *entry.second;
+                    if (!is_supported_global_constexpr_(src.init, src.declared_type)) {
+                        push_error_("gOIR host ABI lane only supports literal/tag-enum/layout(c)-record constant expressions for static mutable global '" +
+                                    src.name + "'.");
+                        return;
+                    }
+                    const auto place = emit_inst_(
+                        state,
+                        src.declared_type,
+                        Effect::Pure,
+                        OpGlobalSlot{.global = gid},
+                        {},
+                        classify_layout_(src.declared_type),
+                        true,
+                        src.declared_type,
+                        PlaceKind::GlobalSlot,
+                        true
+                    );
+                    const auto init = lower_value_as_(state, src.init, src.declared_type);
+                    if (place == kInvalidId || init == kInvalidId) return;
+                    emit_inst_(state, kInvalidType, Effect::MayWrite, OpStore{.place = place, .value = init});
+                }
+
+                ensure_block_term_(state, TermRet{});
+            }
+
             void bind_local_(FuncState& state,
                              const parus::sir::Stmt& stmt,
                              TypeId binding_ty,
@@ -1442,6 +1815,8 @@ namespace parus::goir {
             }
 
             void lower_func_(uint32_t func_index, const parus::sir::Func& fn) {
+                if (fn.is_extern) return;
+
                 FuncState state{};
                 state.realization = realization_by_func_index_[func_index];
                 state.current_block = mod_.add_block(Block{});
